@@ -123,7 +123,6 @@ function buildGeminiApiUrl(baseUrl, model, action, apiKey, options = {}) {
       }
       // 如果 {model} 在 query 里（path 未变），path 可能缺少 /models
       if (cleanPath === pathPart.replace(/\/+$/, '') && !cleanPath.endsWith('/models')) {
-        const logger = require('../utils/logger')
         logger.warn(
           'Gemini 模板 {model} 在 query 中，listModels 路径可能不正确，自动追加 /v1beta/models',
           { baseUrl }
@@ -391,6 +390,7 @@ async function handleMessages(req, res) {
   let accountId
   let accountType
   let sessionHash
+  let account
 
   try {
     const apiKeyData = req.apiKey
@@ -450,7 +450,6 @@ async function handleMessages(req, res) {
     const isApiAccount = accountType === 'gemini-api'
 
     // 获取账户详情
-    let account
     if (isApiAccount) {
       account = await geminiApiAccountService.getAccount(accountId)
       if (!account) {
@@ -1525,6 +1524,7 @@ async function handleGenerateContent(req, res) {
   let accountId = null
   let accountType = null
   let sessionHash = null
+  let account = null
 
   try {
     if (!ensureGeminiPermission(req, res)) {
@@ -1589,7 +1589,7 @@ async function handleGenerateContent(req, res) {
       })
     }
 
-    const account = await geminiAccountService.getAccount(accountId)
+    account = await geminiAccountService.getAccount(accountId)
     if (!account) {
       logger.error(`❌ Gemini account not found: ${accountId}`)
       return res.status(404).json({
@@ -1761,6 +1761,7 @@ async function handleStreamGenerateContent(req, res) {
   let accountId = null
   let accountType = null
   let sessionHash = null
+  let account = null
 
   try {
     if (!ensureGeminiPermission(req, res)) {
@@ -1825,7 +1826,7 @@ async function handleStreamGenerateContent(req, res) {
       })
     }
 
-    const account = await geminiAccountService.getAccount(accountId)
+    account = await geminiAccountService.getAccount(accountId)
     if (!account) {
       logger.error(`❌ Gemini account not found: ${accountId}`)
       return res.status(404).json({

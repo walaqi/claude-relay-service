@@ -236,7 +236,7 @@ const sanitizeErrorForClient = (errorData) => {
   }
   try {
     const str = JSON.stringify(errorData)
-    const cleaned = str.replace(/ \[[^\]\/]+\/[^\]]+\]/g, '')
+    const cleaned = str.replace(/ \[[^\]/]+\/[^\]]+\]/g, '')
     return JSON.parse(cleaned)
   } catch {
     return errorData

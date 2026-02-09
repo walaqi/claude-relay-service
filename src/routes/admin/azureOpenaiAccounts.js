@@ -418,6 +418,10 @@ router.post('/migrate-api-keys-azure', authenticateAdmin, async (req, res) => {
 router.post('/azure-openai-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
   const startTime = Date.now()
+  const {
+    createChatCompletionsTestPayload,
+    extractErrorMessage
+  } = require('../../utils/testPayloadHelper')
 
   try {
     // 获取账户信息
@@ -433,10 +437,6 @@ router.post('/azure-openai-accounts/:accountId/test', authenticateAdmin, async (
     }
 
     // 构造测试请求
-    const {
-      createChatCompletionsTestPayload,
-      extractErrorMessage
-    } = require('../../utils/testPayloadHelper')
     const { getProxyAgent } = require('../../utils/proxyHelper')
 
     const deploymentName = account.deploymentName || 'gpt-4o-mini'
