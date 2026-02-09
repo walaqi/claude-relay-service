@@ -511,6 +511,7 @@ router.post('/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
   const { model = 'gemini-2.5-flash' } = req.body
   const startTime = Date.now()
+  const { extractErrorMessage } = require('../../utils/testPayloadHelper')
 
   try {
     // 获取账户信息
@@ -532,10 +533,7 @@ router.post('/:accountId/test', authenticateAdmin, async (req, res) => {
 
     // 构造测试请求
     const axios = require('axios')
-    const {
-      createGeminiTestPayload,
-      extractErrorMessage
-    } = require('../../utils/testPayloadHelper')
+    const { createGeminiTestPayload } = require('../../utils/testPayloadHelper')
     const { getProxyAgent } = require('../../utils/proxyHelper')
 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`

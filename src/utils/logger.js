@@ -125,7 +125,7 @@ const createConsoleFormat = () =>
     winston.format.timestamp({ format: () => formatDateWithTimezone(new Date(), false) }),
     winston.format.errors({ stack: true }),
     winston.format.colorize(),
-    winston.format.printf(({ level, message, timestamp, stack, ...rest }) => {
+    winston.format.printf(({ level: _level, message, timestamp, stack, ...rest }) => {
       // 时间戳只取时分秒
       const shortTime = timestamp ? timestamp.split(' ').pop() : ''
 
