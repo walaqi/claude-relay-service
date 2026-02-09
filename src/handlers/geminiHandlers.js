@@ -2937,6 +2937,7 @@ async function handleStandardStreamGenerateContent(req, res) {
 
 module.exports = {
   // 工具函数
+  buildGeminiApiUrl,
   generateSessionHash,
   checkPermissions,
   ensureGeminiPermission,

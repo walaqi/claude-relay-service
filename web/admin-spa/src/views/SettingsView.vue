@@ -1218,6 +1218,11 @@
             </div>
           </div>
         </div>
+
+        <!-- 模型价格部分 -->
+        <div v-show="activeSection === 'modelPricing'">
+          <ModelPricingSection />
+        </div>
       </div>
     </div>
   </div>
@@ -1795,11 +1800,6 @@
           </div>
         </div>
       </div>
-    </div>
-
-    <!-- 模型价格部分 -->
-    <div v-show="activeSection === 'modelPricing'">
-      <ModelPricingSection />
     </div>
 
     <!-- ConfirmModal -->

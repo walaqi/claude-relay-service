@@ -333,6 +333,7 @@ const platformFallbackModels = {
   claude: 'claude-sonnet-4-5-20250929',
   'claude-console': 'claude-sonnet-4-5-20250929',
   gemini: 'gemini-2.5-pro',
+  'gemini-api': 'gemini-2.5-flash',
   'openai-responses': 'gpt-5',
   droid: 'claude-sonnet-4-5-20250929',
   ccr: 'claude-sonnet-4-5-20250929'
@@ -424,6 +425,11 @@ const platformConfigs = {
   },
   gemini: {
     label: 'Gemini',
+    icon: 'fas fa-gem',
+    badge: 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
+  },
+  'gemini-api': {
+    label: 'Gemini API',
     icon: 'fas fa-gem',
     badge: 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
   },
@@ -520,6 +526,7 @@ const getAccountEndpoint = () => {
     'claude-console': `${APP_CONFIG.apiPrefix}/admin/claude-console-accounts/${props.account.id}/test`,
     bedrock: `${APP_CONFIG.apiPrefix}/admin/bedrock-accounts/${props.account.id}/test`,
     gemini: `${APP_CONFIG.apiPrefix}/admin/gemini-accounts/${props.account.id}/test`,
+    'gemini-api': `${APP_CONFIG.apiPrefix}/admin/gemini-api-accounts/${props.account.id}/test`,
     'openai-responses': `${APP_CONFIG.apiPrefix}/admin/openai-responses-accounts/${props.account.id}/test`,
     'azure-openai': `${APP_CONFIG.apiPrefix}/admin/azure-openai-accounts/${props.account.id}/test`,
     droid: `${APP_CONFIG.apiPrefix}/admin/droid-accounts/${props.account.id}/test`,
@@ -533,7 +540,9 @@ const startTest = () => {
     const endpoint = getAccountEndpoint()
     if (!endpoint) return
     const authToken = localStorage.getItem('authToken')
-    const useSSE = ['claude', 'claude-console', 'bedrock'].includes(props.account.platform)
+    const useSSE = ['claude', 'claude-console', 'bedrock', 'gemini-api'].includes(
+      props.account.platform
+    )
     state.sendTestRequest(
       endpoint,
       { model: selectedModel.value },

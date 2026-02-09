@@ -2618,6 +2618,7 @@ const supportedTestPlatforms = [
   'claude-console',
   'bedrock',
   'gemini',
+  'gemini-api',
   'openai-responses',
   'azure-openai',
   'droid',

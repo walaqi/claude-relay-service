@@ -415,6 +415,9 @@ const pricingService = require('../../services/pricingService')
 // 获取所有模型价格数据
 router.get('/models/pricing', authenticateAdmin, async (req, res) => {
   try {
+    if (!pricingService.pricingData || Object.keys(pricingService.pricingData).length === 0) {
+      await pricingService.loadPricingData()
+    }
     const data = pricingService.pricingData
     res.json({
       success: true,

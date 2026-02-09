@@ -324,8 +324,16 @@ const loadData = async () => {
     getModelPricingApi(),
     getModelPricingStatusApi()
   ])
-  if (pricingResult.success) pricingData.value = pricingResult.data
-  if (statusResult.success) pricingStatus.value = statusResult.data
+  if (pricingResult.success) {
+    pricingData.value = pricingResult.data
+  } else {
+    showToast(pricingResult.message || '加载模型价格失败', 'error')
+  }
+  if (statusResult.success) {
+    pricingStatus.value = statusResult.data
+  } else {
+    showToast(statusResult.message || '获取价格状态失败', 'error')
+  }
   loading.value = false
 }
 
