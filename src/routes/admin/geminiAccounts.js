@@ -1,5 +1,5 @@
 const express = require('express')
-const geminiAccountService = require('../../services/geminiAccountService')
+const geminiAccountService = require('../../services/account/geminiAccountService')
 const accountGroupService = require('../../services/accountGroupService')
 const apiKeyService = require('../../services/apiKeyService')
 const redis = require('../../models/redis')
@@ -532,7 +532,10 @@ router.post('/:accountId/test', authenticateAdmin, async (req, res) => {
 
     // 构造测试请求
     const axios = require('axios')
-    const { createGeminiTestPayload } = require('../../utils/testPayloadHelper')
+    const {
+      createGeminiTestPayload,
+      extractErrorMessage
+    } = require('../../utils/testPayloadHelper')
     const { getProxyAgent } = require('../../utils/proxyHelper')
 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
@@ -585,7 +588,7 @@ router.post('/:accountId/test', authenticateAdmin, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Test failed',
-      message: error.response?.data?.error?.message || error.message,
+      message: extractErrorMessage(error.response?.data, error.message),
       latency
     })
   }

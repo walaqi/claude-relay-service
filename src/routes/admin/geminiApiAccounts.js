@@ -1,5 +1,5 @@
 const express = require('express')
-const geminiApiAccountService = require('../../services/geminiApiAccountService')
+const geminiApiAccountService = require('../../services/account/geminiApiAccountService')
 const apiKeyService = require('../../services/apiKeyService')
 const accountGroupService = require('../../services/accountGroupService')
 const redis = require('../../models/redis')
