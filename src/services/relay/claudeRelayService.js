@@ -1,26 +1,27 @@
 const https = require('https')
 const zlib = require('zlib')
 const path = require('path')
-const ProxyHelper = require('../utils/proxyHelper')
-const { filterForClaude } = require('../utils/headerFilter')
-const claudeAccountService = require('./claudeAccountService')
-const unifiedClaudeScheduler = require('./unifiedClaudeScheduler')
-const sessionHelper = require('../utils/sessionHelper')
-const logger = require('../utils/logger')
-const config = require('../../config/config')
-const claudeCodeHeadersService = require('./claudeCodeHeadersService')
-const redis = require('../models/redis')
-const ClaudeCodeValidator = require('../validators/clients/claudeCodeValidator')
-const { formatDateWithTimezone } = require('../utils/dateHelper')
-const requestIdentityService = require('./requestIdentityService')
-const { createClaudeTestPayload } = require('../utils/testPayloadHelper')
-const userMessageQueueService = require('./userMessageQueueService')
-const { isStreamWritable } = require('../utils/streamHelper')
+const ProxyHelper = require('../../utils/proxyHelper')
+const { filterForClaude } = require('../../utils/headerFilter')
+const claudeAccountService = require('../account/claudeAccountService')
+const unifiedClaudeScheduler = require('../scheduler/unifiedClaudeScheduler')
+const sessionHelper = require('../../utils/sessionHelper')
+const logger = require('../../utils/logger')
+const config = require('../../../config/config')
+const claudeCodeHeadersService = require('../claudeCodeHeadersService')
+const redis = require('../../models/redis')
+const ClaudeCodeValidator = require('../../validators/clients/claudeCodeValidator')
+const { formatDateWithTimezone } = require('../../utils/dateHelper')
+const requestIdentityService = require('../requestIdentityService')
+const { createClaudeTestPayload } = require('../../utils/testPayloadHelper')
+const userMessageQueueService = require('../userMessageQueueService')
+const { isStreamWritable } = require('../../utils/streamHelper')
+const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const {
   getHttpsAgentForStream,
   getHttpsAgentForNonStream,
   getPricingData
-} = require('../utils/performanceOptimizer')
+} = require('../../utils/performanceOptimizer')
 
 // structuredClone polyfill for Node < 17
 const safeClone =
@@ -693,22 +694,26 @@ class ClaudeRelayService {
 
           if (errorCount >= 1) {
             logger.error(
-              `❌ Account ${accountId} encountered 401 error (${errorCount} errors), marking as unauthorized`
+              `❌ Account ${accountId} encountered 401 error (${errorCount} errors), temporarily pausing`
             )
-            await unifiedClaudeScheduler.markAccountUnauthorized(
-              accountId,
-              accountType,
-              sessionHash
-            )
+          }
+          await upstreamErrorHelper.markTempUnavailable(accountId, accountType, 401).catch(() => {})
+          // 清除粘性会话，让后续请求路由到其他账户
+          if (sessionHash) {
+            await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
           }
         }
         // 检查是否为403状态码（禁止访问）
         // 注意：如果进行了重试，retryCount > 0；这里的 403 是重试后最终的结果
         else if (response.statusCode === 403) {
           logger.error(
-            `🚫 Forbidden error (403) detected for account ${accountId}${retryCount > 0 ? ` after ${retryCount} retries` : ''}, marking as blocked`
+            `🚫 Forbidden error (403) detected for account ${accountId}${retryCount > 0 ? ` after ${retryCount} retries` : ''}, temporarily pausing`
           )
-          await unifiedClaudeScheduler.markAccountBlocked(accountId, accountType, sessionHash)
+          await upstreamErrorHelper.markTempUnavailable(accountId, accountType, 403).catch(() => {})
+          // 清除粘性会话，让后续请求路由到其他账户
+          if (sessionHash) {
+            await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
+          }
         }
         // 检查是否返回组织被禁用错误（400状态码）
         else if (organizationDisabledError) {
@@ -734,6 +739,7 @@ class ClaudeRelayService {
           } else {
             logger.info(`🚫 529 error handling is disabled, skipping account overload marking`)
           }
+          await upstreamErrorHelper.markTempUnavailable(accountId, accountType, 529).catch(() => {})
         }
         // 检查是否为5xx状态码
         else if (response.statusCode >= 500 && response.statusCode < 600) {
@@ -819,6 +825,14 @@ class ClaudeRelayService {
             sessionHash,
             rateLimitResetTimestamp
           )
+          await upstreamErrorHelper
+            .markTempUnavailable(
+              accountId,
+              accountType,
+              429,
+              upstreamErrorHelper.parseRetryAfter(response.headers)
+            )
+            .catch(() => {})
 
           if (dedicatedRateLimitMessage) {
             return {
@@ -1971,6 +1985,14 @@ class ClaudeRelayService {
                 sessionHash,
                 rateLimitResetTimestamp
               )
+              await upstreamErrorHelper
+                .markTempUnavailable(
+                  accountId,
+                  accountType,
+                  429,
+                  upstreamErrorHelper.parseRetryAfter(res.headers)
+                )
+                .catch(() => {})
               logger.warn(`🚫 [Stream] Rate limit detected for account ${accountId}, status 429`)
 
               if (isDedicatedOfficialAccount) {
@@ -2068,21 +2090,29 @@ class ClaudeRelayService {
 
               if (errorCount >= 1) {
                 logger.error(
-                  `❌ [Stream] Account ${accountId} encountered 401 error (${errorCount} errors), marking as unauthorized`
+                  `❌ [Stream] Account ${accountId} encountered 401 error (${errorCount} errors), temporarily pausing`
                 )
-                await unifiedClaudeScheduler.markAccountUnauthorized(
-                  accountId,
-                  accountType,
-                  sessionHash
-                )
+              }
+              await upstreamErrorHelper
+                .markTempUnavailable(accountId, accountType, 401)
+                .catch(() => {})
+              // 清除粘性会话，让后续请求路由到其他账户
+              if (sessionHash) {
+                await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
               }
             } else if (res.statusCode === 403) {
               // 403 处理：走到这里说明重试已用尽或不适用重试，直接标记 blocked
               // 注意：重试逻辑已在 handleErrorResponse 外部提前处理
               logger.error(
-                `🚫 [Stream] Forbidden error (403) detected for account ${accountId}${retryCount > 0 ? ` after ${retryCount} retries` : ''}, marking as blocked`
+                `🚫 [Stream] Forbidden error (403) detected for account ${accountId}${retryCount > 0 ? ` after ${retryCount} retries` : ''}, temporarily pausing`
               )
-              await unifiedClaudeScheduler.markAccountBlocked(accountId, accountType, sessionHash)
+              await upstreamErrorHelper
+                .markTempUnavailable(accountId, accountType, 403)
+                .catch(() => {})
+              // 清除粘性会话，让后续请求路由到其他账户
+              if (sessionHash) {
+                await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
+              }
             } else if (res.statusCode === 529) {
               logger.warn(`🚫 [Stream] Overload error (529) detected for account ${accountId}`)
 
@@ -2104,6 +2134,9 @@ class ClaudeRelayService {
                   `🚫 [Stream] 529 error handling is disabled, skipping account overload marking`
                 )
               }
+              await upstreamErrorHelper
+                .markTempUnavailable(accountId, accountType, 529)
+                .catch(() => {})
             } else if (res.statusCode >= 500 && res.statusCode < 600) {
               logger.warn(
                 `🔥 [Stream] Server error (${res.statusCode}) detected for account ${accountId}`
@@ -2542,6 +2575,14 @@ class ClaudeRelayService {
                 sessionHash,
                 rateLimitResetTimestamp
               )
+              await upstreamErrorHelper
+                .markTempUnavailable(
+                  accountId,
+                  accountType,
+                  429,
+                  upstreamErrorHelper.parseRetryAfter(res.headers)
+                )
+                .catch(() => {})
             }
           } else if (res.statusCode === 200) {
             // 请求成功，清除401和500错误计数
