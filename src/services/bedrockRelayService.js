@@ -136,12 +136,12 @@ class BedrockRelayService {
         }
       }
 
-      const { modelId, isLongContext } = this._selectModel(requestBody, bedrockAccount)
+      const modelId = this._selectModel(requestBody, bedrockAccount)
       const region = this._selectRegion(modelId, bedrockAccount)
       const client = this._getBedrockClient(region, bedrockAccount)
 
       // 转换请求格式为Bedrock格式
-      const bedrockPayload = this._convertToBedrockFormat(requestBody, { isLongContext })
+      const bedrockPayload = this._convertToBedrockFormat(requestBody)
 
       const command = new InvokeModelCommand({
         modelId,
@@ -277,12 +277,12 @@ class BedrockRelayService {
         }
       }
 
-      const { modelId, isLongContext } = this._selectModel(requestBody, bedrockAccount)
+      const modelId = this._selectModel(requestBody, bedrockAccount)
       const region = this._selectRegion(modelId, bedrockAccount)
       const client = this._getBedrockClient(region, bedrockAccount)
 
       // 转换请求格式为Bedrock格式
-      const bedrockPayload = this._convertToBedrockFormat(requestBody, { isLongContext })
+      const bedrockPayload = this._convertToBedrockFormat(requestBody)
 
       const command = new InvokeModelWithResponseStreamCommand({
         modelId,
@@ -399,7 +399,6 @@ class BedrockRelayService {
   }
 
   // 选择使用的模型
-  // Returns { modelId, isLongContext }
   _selectModel(requestBody, bedrockAccount) {
     let selectedModel
 
@@ -421,18 +420,15 @@ class BedrockRelayService {
       logger.info(`🎯 使用系统默认模型: ${selectedModel}`, { metadata: { source: 'default' } })
     }
 
-    // Detect [1m] long context variant before mapping
-    const isLongContext = selectedModel.includes('[1m]')
-
     // 如果是标准Claude模型名，需要映射为Bedrock格式
     const bedrockModel = this._mapToBedrockModel(selectedModel)
-    if (bedrockModel !== selectedModel.replace(/\[1m\]$/, '')) {
+    if (bedrockModel !== selectedModel) {
       logger.info(`🔄 模型映射: ${selectedModel} → ${bedrockModel}`, {
-        metadata: { originalModel: selectedModel, bedrockModel, isLongContext }
+        metadata: { originalModel: selectedModel, bedrockModel }
       })
     }
 
-    return { modelId: bedrockModel, isLongContext }
+    return bedrockModel
   }
 
   // 将标准Claude模型名映射为Bedrock格式
@@ -550,21 +546,11 @@ class BedrockRelayService {
   }
 
   // 转换Claude格式请求到Bedrock格式
-  _convertToBedrockFormat(requestBody, { isLongContext = false } = {}) {
+  _convertToBedrockFormat(requestBody) {
     const bedrockPayload = {
       anthropic_version: 'bedrock-2023-05-31',
       max_tokens: Math.min(requestBody.max_tokens || this.maxOutputTokens, this.maxOutputTokens),
       messages: requestBody.messages || []
-    }
-
-    // Enable 1M context window beta when [1m] model variant is requested
-    if (isLongContext) {
-      bedrockPayload.anthropic_beta = [
-        ...(requestBody.anthropic_beta || []),
-        'context-1m-2025-08-07'
-      ]
-    } else if (requestBody.anthropic_beta) {
-      bedrockPayload.anthropic_beta = requestBody.anthropic_beta
     }
 
     // 添加系统提示词
