@@ -511,6 +511,33 @@ class BedrockRelayService {
     return this.defaultRegion
   }
 
+  // Sanitize cache_control fields for Bedrock compatibility.
+  // Bedrock only supports { type: "ephemeral" } — extra fields like "scope"
+  // (added in Claude Code v2.1.38+) cause ValidationException.
+  _sanitizeCacheControl(obj) {
+    if (obj == null || typeof obj !== 'object') return obj
+
+    if (Array.isArray(obj)) {
+      obj.forEach((item) => this._sanitizeCacheControl(item))
+      return obj
+    }
+
+    if (obj.cache_control && typeof obj.cache_control === 'object') {
+      // Keep only the "type" field that Bedrock accepts
+      obj.cache_control = { type: obj.cache_control.type || 'ephemeral' }
+    }
+
+    // Recurse into known nested structures (messages[].content, tool input_schema, etc.)
+    for (const key of Object.keys(obj)) {
+      const val = obj[key]
+      if (val && typeof val === 'object') {
+        this._sanitizeCacheControl(val)
+      }
+    }
+
+    return obj
+  }
+
   // 转换Claude格式请求到Bedrock格式
   _convertToBedrockFormat(requestBody) {
     const bedrockPayload = {
@@ -549,6 +576,9 @@ class BedrockRelayService {
     if (requestBody.tool_choice) {
       bedrockPayload.tool_choice = requestBody.tool_choice
     }
+
+    // Sanitize cache_control for Bedrock compatibility (strip unsupported fields like "scope")
+    this._sanitizeCacheControl(bedrockPayload)
 
     return bedrockPayload
   }
