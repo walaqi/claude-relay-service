@@ -282,7 +282,11 @@ class UnifiedClaudeScheduler {
                 logger.info(`🚫 Claude account ${account.name} (Pro) does not support Opus model`)
                 continue // Claude Pro 不支持 Opus
               }
-              if (info.accountType === 'claude_pro' || info.accountType === 'claude_free') {
+              if (
+                info.accountType === 'claude_pro' ||
+                info.accountType === 'claude_free' ||
+                info.accountType === 'free'
+              ) {
                 logger.info(
                   `🚫 Claude account ${account.name} (${info.accountType}) does not support Opus model`
                 )
