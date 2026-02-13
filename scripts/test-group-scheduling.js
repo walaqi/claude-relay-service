@@ -7,10 +7,10 @@ require('dotenv').config()
 const { v4: uuidv4 } = require('uuid')
 const redis = require('../src/models/redis')
 const accountGroupService = require('../src/services/accountGroupService')
-const claudeAccountService = require('../src/services/claudeAccountService')
-const claudeConsoleAccountService = require('../src/services/claudeConsoleAccountService')
+const claudeAccountService = require('../src/services/account/claudeAccountService')
+const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
 const apiKeyService = require('../src/services/apiKeyService')
-const unifiedClaudeScheduler = require('../src/services/unifiedClaudeScheduler')
+const unifiedClaudeScheduler = require('../src/services/scheduler/unifiedClaudeScheduler')
 
 // 测试配置
 const TEST_PREFIX = 'test_group_'
@@ -436,8 +436,9 @@ async function test8_groupMemberManagement() {
     const account = testData.accounts.find((a) => a.type === 'claude')
 
     // 获取账户所属分组
-    const accountGroup = await accountGroupService.getAccountGroup(account.id)
-    if (accountGroup && accountGroup.id === claudeGroup.id) {
+    const accountGroups = await accountGroupService.getAccountGroup(account.id)
+    const hasTargetGroup = accountGroups.some((group) => group.id === claudeGroup.id)
+    if (hasTargetGroup) {
       log('✅ 账户分组查询验证通过', 'success')
     } else {
       throw new Error('账户分组查询结果不正确')

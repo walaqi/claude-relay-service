@@ -13,6 +13,10 @@ pnpm-debug.log*
 # Claude specific directories
 .claude/
 
+# MCP configuration (local only)
+.mcp.json
+.spec-workflow/
+
 # Data directory (contains sensitive information)
 data/
 !data/.gitkeep
@@ -22,6 +26,7 @@ redis_data/
 
 # Logs directory
 logs/
+logs1/
 *.log
 startup.log
 app.log
@@ -212,6 +217,10 @@ local/
 debug.log
 error.log
 access.log
+http-debug*.log
+logs/http-debug-*.log
+
+src/middleware/debugInterceptor.js
 
 # Session files
 sessions/

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:  # 支持手动触发
 
 permissions:
   contents: write
@@ -24,6 +25,17 @@ jobs:
     - name: Check if version bump is needed
       id: check
       run: |
+        # 检查提交消息是否包含强制发布标记（[force release]）
+        COMMIT_MSG=$(git log -1 --pretty=%B | tr -d '\r')
+        echo "Latest commit message:"
+        echo "$COMMIT_MSG"
+
+        FORCE_RELEASE=false
+        if echo "$COMMIT_MSG" | grep -qi "\[force release\]"; then
+          echo "Detected [force release] marker, forcing version bump"
+          FORCE_RELEASE=true
+        fi
+
         # 检测是否是合并提交
         PARENT_COUNT=$(git rev-list --parents -n 1 HEAD | wc -w)
         PARENT_COUNT=$((PARENT_COUNT - 1))
@@ -67,8 +79,15 @@ jobs:
             break
           fi
         done <<< "$CHANGED_FILES"
-        
-        if [ "$SIGNIFICANT_CHANGES" = true ]; then
+
+        # 检查是否是手动触发
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "Manual workflow trigger detected, forcing version bump"
+          echo "needs_bump=true" >> $GITHUB_OUTPUT
+        elif [ "$FORCE_RELEASE" = true ]; then
+          echo "Force release marker detected, forcing version bump"
+          echo "needs_bump=true" >> $GITHUB_OUTPUT
+        elif [ "$SIGNIFICANT_CHANGES" = true ]; then
           echo "Significant changes detected, version bump needed"
           echo "needs_bump=true" >> $GITHUB_OUTPUT
         else
@@ -246,6 +265,23 @@ jobs:
         git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
         git push origin HEAD:main "$NEW_TAG"
 
+    - name: Prepare image names
+      id: image_names
+      if: steps.check.outputs.needs_bump == 'true'
+      run: |
+        DOCKER_USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
+        if [ -z "$DOCKER_USERNAME" ]; then
+          DOCKER_USERNAME="weishaw"
+        fi
+
+        DOCKER_IMAGE=$(echo "${DOCKER_USERNAME}/claude-relay-service" | tr '[:upper:]' '[:lower:]')
+        GHCR_IMAGE=$(echo "ghcr.io/${{ github.repository_owner }}/claude-relay-service" | tr '[:upper:]' '[:lower:]')
+
+        {
+          echo "docker_image=${DOCKER_IMAGE}"
+          echo "ghcr_image=${GHCR_IMAGE}"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Create GitHub Release
       if: steps.check.outputs.needs_bump == 'true'
       uses: softprops/action-gh-release@v1
@@ -256,8 +292,10 @@ jobs:
           ## 🐳 Docker 镜像
           
           ```bash
-          docker pull ${{ secrets.DOCKERHUB_USERNAME || 'weishaw' }}/claude-relay-service:${{ steps.next_version.outputs.new_tag }}
-          docker pull ${{ secrets.DOCKERHUB_USERNAME || 'weishaw' }}/claude-relay-service:latest
+          docker pull ${{ steps.image_names.outputs.docker_image }}:${{ steps.next_version.outputs.new_tag }}
+          docker pull ${{ steps.image_names.outputs.docker_image }}:latest
+          docker pull ${{ steps.image_names.outputs.ghcr_image }}:${{ steps.next_version.outputs.new_tag }}
+          docker pull ${{ steps.image_names.outputs.ghcr_image }}:latest
           ```
           
           ## 📦 主要更新
@@ -388,20 +426,32 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+    - name: Log in to GitHub Container Registry
+      if: steps.check.outputs.needs_bump == 'true'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Build and push Docker image
       if: steps.check.outputs.needs_bump == 'true'
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: .
         platforms: linux/amd64,linux/arm64
         push: true
         tags: |
-          ${{ secrets.DOCKERHUB_USERNAME }}/claude-relay-service:${{ steps.next_version.outputs.new_tag }}
-          ${{ secrets.DOCKERHUB_USERNAME }}/claude-relay-service:latest
-          ${{ secrets.DOCKERHUB_USERNAME }}/claude-relay-service:${{ steps.next_version.outputs.new_version }}
+          ${{ steps.image_names.outputs.docker_image }}:${{ steps.next_version.outputs.new_tag }}
+          ${{ steps.image_names.outputs.docker_image }}:latest
+          ${{ steps.image_names.outputs.docker_image }}:${{ steps.next_version.outputs.new_version }}
+          ${{ steps.image_names.outputs.ghcr_image }}:${{ steps.next_version.outputs.new_tag }}
+          ${{ steps.image_names.outputs.ghcr_image }}:latest
+          ${{ steps.image_names.outputs.ghcr_image }}:${{ steps.next_version.outputs.new_version }}
         labels: |
           org.opencontainers.image.version=${{ steps.next_version.outputs.new_version }}
           org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.source=https://github.com/${{ github.repository }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
@@ -410,6 +460,8 @@ jobs:
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        DOCKER_IMAGE: ${{ steps.image_names.outputs.docker_image }}
+        GHCR_IMAGE: ${{ steps.image_names.outputs.ghcr_image }}
       continue-on-error: true
       run: |
         VERSION="${{ steps.next_version.outputs.new_version }}"
@@ -430,13 +482,16 @@ jobs:
         MESSAGE+="${CHANGELOG_TRUNCATED}"$'\n'$'\n'
         MESSAGE+="🐳 *Docker 部署:*"$'\n'
         MESSAGE+="\`\`\`bash"$'\n'
-        MESSAGE+="docker pull weishaw/claude-relay-service:${TAG}"$'\n'
-        MESSAGE+="docker pull weishaw/claude-relay-service:latest"$'\n'
+        MESSAGE+="docker pull ${DOCKER_IMAGE}:${TAG}"$'\n'
+        MESSAGE+="docker pull ${DOCKER_IMAGE}:latest"$'\n'
+        MESSAGE+="docker pull ${GHCR_IMAGE}:${TAG}"$'\n'
+        MESSAGE+="docker pull ${GHCR_IMAGE}:latest"$'\n'
         MESSAGE+="\`\`\`"$'\n'$'\n'
         MESSAGE+="🔗 *相关链接:*"$'\n'
         MESSAGE+="• [GitHub Release](https://github.com/${REPO}/releases/tag/${TAG})"$'\n'
         MESSAGE+="• [完整更新日志](https://github.com/${REPO}/releases)"$'\n'
-        MESSAGE+="• [Docker Hub](https://hub.docker.com/r/weishaw/claude-relay-service)"$'\n'$'\n'
+        MESSAGE+="• [Docker Hub](https://hub.docker.com/r/${DOCKER_IMAGE%/*}/claude-relay-service)"$'\n'
+        MESSAGE+="• [GHCR](https://ghcr.io/${GHCR_IMAGE#ghcr.io/})"$'\n'$'\n'
         MESSAGE+="#ClaudeRelay #Update #v${VERSION//./_}"
         
         # 使用 jq 构建 JSON 并发送

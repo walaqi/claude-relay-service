@@ -3,8 +3,8 @@
  */
 
 const redis = require('../src/models/redis')
-const claudeAccountService = require('../src/services/claudeAccountService')
-const claudeConsoleAccountService = require('../src/services/claudeConsoleAccountService')
+const claudeAccountService = require('../src/services/account/claudeAccountService')
+const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
 const accountGroupService = require('../src/services/accountGroupService')
 
 async function testApiResponse() {
@@ -79,7 +79,7 @@ async function testApiResponse() {
     console.log('\n\n📊 验证结果:')
 
     // 检查 platform 字段
-    const claudeWithPlatform = claudeAccounts.filter((a) => a.platform === 'claude-oauth')
+    const claudeWithPlatform = claudeAccounts.filter((a) => a.platform === 'claude')
     const consoleWithPlatform = consoleAccounts.filter((a) => a.platform === 'claude-console')
 
     if (claudeWithPlatform.length === claudeAccounts.length) {

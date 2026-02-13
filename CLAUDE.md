@@ -1,231 +1,167 @@
-# CLAUDE.md
+# CLAUDE.md <260209.0>
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-这个文件为 Claude Code (claude.ai/code) 提供在此代码库中工作的指导。
+This file provides guidance to Claude Code when working with this repository.
 
 ## 项目概述
 
-Claude Relay Service 是一个功能完整的 AI API 中转服务，支持 Claude 和 Gemini 双平台。提供多账户管理、API Key 认证、代理配置和现代化 Web 管理界面。该服务作为客户端（如 SillyTavern、Claude Code、Gemini CLI）与 AI API 之间的中间件，提供认证、限流、监控等功能。
+Claude Relay Service — 多平台 AI API 中转服务，作为客户端与上游 AI API 之间的中间件。
+支持 Claude (官方/Console)、Gemini、OpenAI Responses、AWS Bedrock、Azure OpenAI、Droid、CCR 等账户类型。
+核心能力：多账户管理、API Key 认证、统一调度、代理配置、限流、成本统计。
 
-## 核心架构
+## 架构原则
 
-### 关键架构概念
-- **代理认证流**: 客户端用自建API Key → 验证 → 获取Claude账户OAuth token → 转发到Anthropic
-- **Token管理**: 自动监控OAuth token过期并刷新，支持10秒提前刷新策略
-- **代理支持**: 每个Claude账户支持独立代理配置，OAuth token交换也通过代理进行
-- **数据加密**: 敏感数据（refreshToken, accessToken）使用AES加密存储在Redis
+### Clean Architecture 分层映射
 
-### 主要服务组件
-- **claudeRelayService.js**: 核心代理服务，处理请求转发和流式响应
-- **claudeAccountService.js**: Claude账户管理，OAuth token刷新和账户选择
-- **geminiAccountService.js**: Gemini账户管理，Google OAuth token刷新和账户选择
-- **apiKeyService.js**: API Key管理，验证、限流和使用统计
-- **oauthHelper.js**: OAuth工具，PKCE流程实现和代理支持
+| 层级 | 目录 | 职责 |
+|------|------|------|
+| **框架层** | `src/routes/`, `src/middleware/` | HTTP 路由、请求验证、响应格式化 |
+| **接口适配层** | `src/handlers/`, `src/services/openaiToClaude.js` | 请求/响应格式转换 |
+| **用例层** | `src/services/*Scheduler.js`, `*RelayService.js` | 调度逻辑、转发编排 |
+| **实体层** | `src/services/*AccountService.js`, `src/models/` | 账户管理、数据模型 |
+| **基础设施层** | `src/utils/`, `config/` | 日志、缓存、加密、代理 |
 
-### 认证和代理流程
-1. 客户端使用自建API Key（cr_前缀格式）发送请求
-2. authenticateApiKey中间件验证API Key有效性和速率限制
-3. claudeAccountService自动选择可用Claude账户
-4. 检查OAuth access token有效性，过期则自动刷新（使用代理）
-5. 移除客户端API Key，使用OAuth Bearer token转发请求
-6. 通过账户配置的代理发送到Anthropic API
-7. 流式或非流式返回响应，记录使用统计
+### 开发原则
 
-### OAuth集成
-- **PKCE流程**: 完整的OAuth 2.0 PKCE实现，支持代理
-- **自动刷新**: 智能token过期检测和自动刷新机制
-- **代理支持**: OAuth授权和token交换全程支持代理配置
-- **安全存储**: claudeAiOauth数据加密存储，包含accessToken、refreshToken、scopes
+- **依赖方向**: 外层 → 内层，内层不知道外层存在
+- **新增路由**: 只做参数提取和响应格式化，业务逻辑放 service
+- **新增服务**: 先确定属于哪一层，遵循该层职责边界
+- **格式转换**: 不同 API 格式的转换放 handlers 或专用转换服务
+- **数据访问**: 通过 `src/models/redis.js` 统一访问
+
+### 安全约束
+
+- 敏感数据（OAuth token、refreshToken、credentials）必须 AES 加密存储（参考 `claudeAccountService.js`）
+- API Key 使用 SHA-256 哈希存储，禁止明文
+- 每个请求必须经过完整认证链（API Key → 权限 → 客户端限制 → 模型黑名单）
+- 客户端断开时必须通过 AbortController 清理资源和并发计数
+- 日志中禁止输出完整 token，使用 `tokenMask.js` 脱敏
+
+## 项目结构
+
+```
+src/
+├── routes/              # HTTP 路由
+│   ├── api.js           # Claude API 主路由
+│   ├── admin/           # 管理后台路由（24个子文件）
+│   ├── geminiRoutes.js, standardGeminiRoutes.js
+│   ├── openaiRoutes.js, openaiClaudeRoutes.js, openaiGeminiRoutes.js
+│   ├── azureOpenaiRoutes.js, droidRoutes.js
+│   ├── userRoutes.js, webhook.js, unified.js, apiStats.js, web.js
+├── middleware/           # auth.js(认证/权限/限流), browserFallback.js
+├── handlers/             # geminiHandlers.js
+├── services/             # 业务服务
+│   ├── relay/                 # 各平台转发服务（9个）
+│   ├── account/               # 各平台账户管理（11个）
+│   ├── scheduler/             # 统一调度器（4个）
+│   ├── apiKeyService.js       # API Key 管理
+│   ├── pricingService.js      # 定价和成本
+│   └── ...                    # 其余 ~30 个业务服务
+├── models/redis.js       # Redis 数据模型
+├── utils/                # 35+ 工具文件（logger, proxy, oauth, cache, stream...）
+config/config.js          # 主配置
+scripts/                  # 运维脚本
+cli/                      # CLI 工具
+web/admin-spa/            # Vue SPA 管理界面
+data/init.json            # 管理员凭据
+```
+
+## 核心请求流程
+
+```
+客户端(cr_前缀Key) → 路由 → auth中间件(验证/权限/限流/模型黑名单)
+  → 统一调度器(选账户/粘性会话) → Token检查/刷新
+  → 转发服务(通过代理发送) → 上游API
+  → 流式/非流式响应 → Usage捕获 → 成本计算 → 返回客户端
+```
+
+关键机制：
+- **粘性会话**: 基于请求内容 hash 绑定账户，同一会话用同一账户
+- **并发控制**: Redis Sorted Set 实现，支持排队等待（非直接 429）
+- **529 处理**: 自动标记过载账户，配置时长内排除
+- **加密存储**: 敏感数据（OAuth token、credentials）AES 加密存于 Redis
+- **流式响应**: SSE 传输，实时捕获 usage，客户端断开时 AbortController 清理资源
+
+## 开发规范
+
+### 代码格式化
+
+- **必须使用 Prettier**: `npx prettier --write <file>`
+- 前端额外安装了 `prettier-plugin-tailwindcss`
+- 提交前检查：`npx prettier --check <file>`
+
+### 开发工作流
+
+1. **理解现有代码** → 读相关文件，了解现有模式
+2. **编写代码** → 重用已有服务和工具函数
+3. **格式化** → `npx prettier --write <修改的文件>`
+4. **检查** → `npm run lint`
+5. **测试** → `npm test`
+6. **验证** → `npm run cli status` 确认服务正常
+
+### 前端要求
+
+- 响应式设计：Tailwind CSS 响应式前缀（sm:、md:、lg:、xl:）
+- 暗黑模式：所有组件必须兼容，使用 `dark:` 前缀
+- 主题切换：`web/admin-spa/src/stores/theme.js` 的 `useThemeStore()`
+- 保持现有玻璃态设计风格
+
+暗黑模式配色对照：
+
+| 元素 | 明亮模式 | 暗黑模式 |
+|------|----------|----------|
+| 文本 | `text-gray-700` | `dark:text-gray-200` |
+| 背景 | `bg-white` | `dark:bg-gray-800` |
+| 边框 | `border-gray-200` | `dark:border-gray-700` |
+| 状态色 | `text-blue-500` / `text-green-600` / `text-red-500` | 保持一致 |
+
+### 代码修改原则
+
+- 先检查现有模式和风格，重用已有服务和工具函数
+- 敏感数据必须加密存储（参考 claudeAccountService.js）
+- 遵循现有的错误处理和日志记录模式
 
 ## 常用命令
 
-### 基本开发命令
 ```bash
-# 安装依赖和初始化
-npm install
-npm run setup                  # 生成配置和管理员凭据
-npm run install:web           # 安装Web界面依赖
-
-# 开发和运行
-npm run dev                   # 开发模式（热重载）
-npm start                     # 生产模式
-npm test                      # 运行测试
-npm run lint                  # 代码检查
-
-# Docker部署
-docker-compose up -d          # 推荐方式
-docker-compose --profile monitoring up -d  # 包含监控
-
-# 服务管理
-npm run service:start:daemon  # 后台启动（推荐）
-npm run service:status        # 查看服务状态
-npm run service:logs          # 查看日志
-npm run service:stop          # 停止服务
-
-### 开发环境配置
-必须配置的环境变量：
-- `JWT_SECRET`: JWT密钥（32字符以上随机字符串）
-- `ENCRYPTION_KEY`: 数据加密密钥（32字符固定长度）
-- `REDIS_HOST`: Redis主机地址（默认localhost）
-- `REDIS_PORT`: Redis端口（默认6379）
-- `REDIS_PASSWORD`: Redis密码（可选）
-
-初始化命令：
-```bash
-cp config/config.example.js config/config.js
-cp .env.example .env
-npm run setup  # 自动生成密钥并创建管理员账户
+npm install && npm run setup    # 初始化
+npm run dev                     # 开发模式（热重载）
+npm start                       # 生产模式
+npm run lint                    # ESLint 检查
+npm test                        # Jest + SuperTest
+docker-compose up -d            # Docker 部署
+npm run cli status              # 系统状态
+npm run data:export             # 导出 Redis 数据
+npm run data:debug              # 调试 Redis 键
 ```
 
-## Web界面功能
+## 环境变量（必须）
 
-### OAuth账户添加流程
-1. **基本信息和代理设置**: 配置账户名称、描述和代理参数
-2. **OAuth授权**: 
-   - 生成授权URL → 用户打开链接并登录Claude Code账号
-   - 授权后会显示Authorization Code → 复制并粘贴到输入框
-   - 系统自动交换token并创建账户
+- `JWT_SECRET` — JWT 密钥（32字符+）
+- `ENCRYPTION_KEY` — AES 加密密钥（32字符固定）
+- `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` — Redis 连接
 
-### 核心管理功能
-- **实时仪表板**: 系统统计、账户状态、使用量监控
-- **API Key管理**: 创建、配额设置、使用统计查看
-- **Claude账户管理**: OAuth账户添加、代理配置、状态监控
-- **系统日志**: 实时日志查看，多级别过滤
-
-## 重要端点
-
-### API转发端点
-- `POST /api/v1/messages` - 主要消息处理端点（支持流式）
-- `GET /api/v1/models` - 模型列表（兼容性）
-- `GET /api/v1/usage` - 使用统计查询
-- `GET /api/v1/key-info` - API Key信息
-
-### OAuth管理端点
-- `POST /admin/claude-accounts/generate-auth-url` - 生成OAuth授权URL（含代理）
-- `POST /admin/claude-accounts/exchange-code` - 交换authorization code
-- `POST /admin/claude-accounts` - 创建OAuth账户
-
-### 系统端点
-- `GET /health` - 健康检查
-- `GET /web` - Web管理界面
-- `GET /admin/dashboard` - 系统概览数据
+其他可选环境变量见 `.env.example`。
 
 ## 故障排除
 
-### OAuth相关问题
-1. **代理配置错误**: 检查代理设置是否正确，OAuth token交换也需要代理
-2. **授权码无效**: 确保复制了完整的Authorization Code，没有遗漏字符
-3. **Token刷新失败**: 检查refreshToken有效性和代理配置
+| 问题 | 排查方向 |
+|------|----------|
+| Redis 连接失败 | 检查 REDIS_HOST/PORT/PASSWORD |
+| 管理员登录失败 | 检查 data/init.json，运行 `npm run setup` |
+| API Key 格式错误 | 确保使用 `cr_` 前缀格式（可通过 API_KEY_PREFIX 配置） |
+| Token 刷新失败 | 检查 refreshToken 有效性和代理配置，查看 `logs/token-refresh-error.log` |
+| 调度器选账户失败 | 检查账户 status:'active'，确认类型与路由匹配，查看粘性会话绑定 |
+| 并发计数泄漏 | 系统每分钟自动清理，重启也会清理 |
+| 粘性会话失效 | 检查 Redis 中 session 数据，Nginx 代理需添加 `underscores_in_headers on` |
+| LDAP 认证失败 | 检查 LDAP_URL/BIND_DN/BIND_PASSWORD，自签名证书设 `LDAP_TLS_REJECT_UNAUTHORIZED=false` |
+| Webhook 通知失败 | 确认 WEBHOOK_ENABLED=true，检查 WEBHOOK_URLS 格式，查看 `logs/webhook-*.log` |
+| 成本统计不准确 | 运行 `npm run init:costs`，检查 pricingService 模型价格 |
 
-### Gemini Token刷新问题
-1. **刷新失败**: 确保 refresh_token 有效且未过期
-2. **错误日志**: 查看 `logs/token-refresh-error.log` 获取详细错误信息
-3. **测试脚本**: 运行 `node scripts/test-gemini-refresh.js` 测试 token 刷新
+日志：`logs/` 目录。Web 界面 `/admin-next/` 可实时查看。
 
-### 常见开发问题
-1. **Redis连接失败**: 确认Redis服务运行，检查连接配置
-2. **管理员登录失败**: 检查init.json同步到Redis，运行npm run setup
-3. **API Key格式错误**: 确保使用cr_前缀格式
-4. **代理连接问题**: 验证SOCKS5/HTTP代理配置和认证信息
-
-### 调试工具
-- **日志系统**: Winston结构化日志，支持不同级别
-- **CLI工具**: 命令行状态查看和管理
-- **Web界面**: 实时日志查看和系统监控
-- **健康检查**: /health端点提供系统状态
-
-## 开发最佳实践
-
-### 代码格式化要求
-- **必须使用 Prettier 格式化所有代码**
-- 后端代码（src/）：运行 `npx prettier --write <file>` 格式化
-- 前端代码（web/admin-spa/）：已安装 `prettier-plugin-tailwindcss`，运行 `npx prettier --write <file>` 格式化
-- 提交前检查格式：`npx prettier --check <file>`
-- 格式化所有文件：`npm run format`（如果配置了此脚本）
-
-### 代码修改原则
-- 对现有文件进行修改时，首先检查代码库的现有模式和风格
-- 尽可能重用现有的服务和工具函数，避免重复代码
-- 遵循项目现有的错误处理和日志记录模式
-- 敏感数据必须使用加密存储（参考 claudeAccountService.js 中的加密实现）
-
-### 测试和质量保证
-- 运行 `npm run lint` 进行代码风格检查（使用 ESLint）
-- 运行 `npm test` 执行测试套件（Jest + SuperTest 配置）
-- 在修改核心服务后，使用 CLI 工具验证功能：`npm run cli status`
-- 检查日志文件 `logs/claude-relay-*.log` 确认服务正常运行
-- 注意：当前项目缺少实际测试文件，建议补充单元测试和集成测试
-
-### 开发工作流
-- **功能开发**: 始终从理解现有代码开始，重用已有的服务和模式
-- **调试流程**: 使用 Winston 日志 + Web 界面实时日志查看 + CLI 状态工具
-- **代码审查**: 关注安全性（加密存储）、性能（异步处理）、错误处理
-- **部署前检查**: 运行 lint → 测试 CLI 功能 → 检查日志 → Docker 构建
-
-### 常见文件位置
-- 核心服务逻辑：`src/services/` 目录
-- 路由处理：`src/routes/` 目录 
-- 中间件：`src/middleware/` 目录
-- 配置管理：`config/config.js`
-- Redis 模型：`src/models/redis.js`
-- 工具函数：`src/utils/` 目录
-
-### 重要架构决策
-- 所有敏感数据（OAuth token、refreshToken）都使用 AES 加密存储在 Redis
-- 每个 Claude 账户支持独立的代理配置，包括 SOCKS5 和 HTTP 代理
-- API Key 使用哈希存储，支持 `cr_` 前缀格式
-- 请求流程：API Key 验证 → 账户选择 → Token 刷新（如需）→ 请求转发
-- 支持流式和非流式响应，客户端断开时自动清理资源
-
-### 核心数据流和性能优化
-- **哈希映射优化**: API Key 验证从 O(n) 优化到 O(1) 查找
-- **智能 Usage 捕获**: 从 SSE 流中解析真实的 token 使用数据
-- **多维度统计**: 支持按时间、模型、用户的实时使用统计
-- **异步处理**: 非阻塞的统计记录和日志写入
-- **原子操作**: Redis 管道操作确保数据一致性
-
-### 安全和容错机制
-- **多层加密**: API Key 哈希 + OAuth Token AES 加密
-- **零信任验证**: 每个请求都需要完整的认证链
-- **优雅降级**: Redis 连接失败时的回退机制
-- **自动重试**: 指数退避重试策略和错误隔离
-- **资源清理**: 客户端断开时的自动清理机制
-
-## 项目特定注意事项
-
-### Redis 数据结构
-- **API Keys**: `api_key:{id}` (详细信息) + `api_key_hash:{hash}` (快速查找)
-- **Claude 账户**: `claude_account:{id}` (加密的 OAuth 数据)
-- **管理员**: `admin:{id}` + `admin_username:{username}` (用户名映射)
-- **会话**: `session:{token}` (JWT 会话管理)
-- **使用统计**: `usage:daily:{date}:{key}:{model}` (多维度统计)
-- **系统信息**: `system_info` (系统状态缓存)
-
-### 流式响应处理
-- 支持 SSE (Server-Sent Events) 流式传输
-- 自动从流中解析 usage 数据并记录
-- 客户端断开时通过 AbortController 清理资源
-- 错误时发送适当的 SSE 错误事件
-
-### CLI 工具使用示例
-```bash
-# 创建新的 API Key
-npm run cli keys create -- --name "MyApp" --limit 1000
-
-# 查看系统状态
-npm run cli status
-
-# 管理 Claude 账户
-npm run cli accounts list
-npm run cli accounts refresh <accountId>
-
-# 管理员操作
-npm run cli admin create -- --username admin2
-npm run cli admin reset-password -- --username admin
-```
 # important-instruction-reminders
+
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+NEVER proactively create documentation files (\*.md) or README files. Only create documentation files if explicitly requested by the User.

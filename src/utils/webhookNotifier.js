@@ -1,13 +1,10 @@
-const axios = require('axios')
 const logger = require('./logger')
-const config = require('../../config/config')
+const webhookService = require('../services/webhookService')
+const { getISOStringWithTimezone } = require('./dateHelper')
 
 class WebhookNotifier {
   constructor() {
-    this.webhookUrls = config.webhook?.urls || []
-    this.timeout = config.webhook?.timeout || 10000
-    this.retries = config.webhook?.retries || 3
-    this.enabled = config.webhook?.enabled !== false
+    // 保留此类用于兼容性，实际功能委托给webhookService
   }
 
   /**
@@ -22,96 +19,60 @@ class WebhookNotifier {
    * @param {string} notification.timestamp - 时间戳
    */
   async sendAccountAnomalyNotification(notification) {
-    if (!this.enabled || this.webhookUrls.length === 0) {
-      logger.debug('Webhook notification disabled or no URLs configured')
-      return
-    }
-
-    const payload = {
-      type: 'account_anomaly',
-      data: {
+    try {
+      // 使用新的webhookService发送通知
+      await webhookService.sendNotification('accountAnomaly', {
         accountId: notification.accountId,
         accountName: notification.accountName,
         platform: notification.platform,
         status: notification.status,
-        errorCode: notification.errorCode,
+        errorCode:
+          notification.errorCode || this._getErrorCode(notification.platform, notification.status),
         reason: notification.reason,
-        timestamp: notification.timestamp || new Date().toISOString(),
-        service: 'claude-relay-service'
-      }
-    }
-
-    logger.info(
-      `📢 Sending account anomaly webhook notification: ${notification.accountName} (${notification.accountId}) - ${notification.status}`
-    )
-
-    const promises = this.webhookUrls.map((url) => this._sendWebhook(url, payload))
-
-    try {
-      await Promise.allSettled(promises)
-    } catch (error) {
-      logger.error('Failed to send webhook notifications:', error)
-    }
-  }
-
-  /**
-   * 发送Webhook请求
-   * @param {string} url - Webhook URL
-   * @param {Object} payload - 请求载荷
-   */
-  async _sendWebhook(url, payload, attempt = 1) {
-    try {
-      const response = await axios.post(url, payload, {
-        timeout: this.timeout,
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'claude-relay-service/webhook-notifier'
-        }
+        timestamp: notification.timestamp || getISOStringWithTimezone(new Date())
       })
-
-      if (response.status >= 200 && response.status < 300) {
-        logger.info(`✅ Webhook sent successfully to ${url}`)
-      } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
     } catch (error) {
-      logger.error(
-        `❌ Failed to send webhook to ${url} (attempt ${attempt}/${this.retries}):`,
-        error.message
-      )
-
-      // 重试机制
-      if (attempt < this.retries) {
-        const delay = Math.pow(2, attempt - 1) * 1000 // 指数退避
-        logger.info(`🔄 Retrying webhook to ${url} in ${delay}ms...`)
-
-        await new Promise((resolve) => setTimeout(resolve, delay))
-        return this._sendWebhook(url, payload, attempt + 1)
-      }
-
-      logger.error(`💥 All ${this.retries} webhook attempts failed for ${url}`)
+      logger.error('Failed to send account anomaly notification:', error)
     }
   }
 
   /**
-   * 测试Webhook连通性
+   * 测试Webhook连通性（兼容旧接口）
    * @param {string} url - Webhook URL
+   * @param {string} type - 平台类型（可选）
    */
-  async testWebhook(url) {
-    const testPayload = {
-      type: 'test',
-      data: {
-        message: 'Claude Relay Service webhook test',
-        timestamp: new Date().toISOString(),
-        service: 'claude-relay-service'
-      }
-    }
-
+  async testWebhook(url, type = 'custom') {
     try {
-      await this._sendWebhook(url, testPayload)
-      return { success: true }
+      // 创建临时平台配置
+      const platform = {
+        type,
+        url,
+        enabled: true,
+        timeout: 10000
+      }
+
+      const result = await webhookService.testWebhook(platform)
+      return result
     } catch (error) {
       return { success: false, error: error.message }
+    }
+  }
+
+  /**
+   * 发送账号事件通知
+   * @param {string} eventType - 事件类型 (account.created, account.updated, account.deleted, account.status_changed)
+   * @param {Object} data - 事件数据
+   */
+  async sendAccountEvent(eventType, data) {
+    try {
+      // 使用webhookService发送通知
+      await webhookService.sendNotification('accountEvent', {
+        eventType,
+        ...data,
+        timestamp: data.timestamp || getISOStringWithTimezone(new Date())
+      })
+    } catch (error) {
+      logger.error(`Failed to send account event (${eventType}):`, error)
     }
   }
 
@@ -125,6 +86,7 @@ class WebhookNotifier {
     const errorCodes = {
       'claude-oauth': {
         unauthorized: 'CLAUDE_OAUTH_UNAUTHORIZED',
+        blocked: 'CLAUDE_OAUTH_BLOCKED',
         error: 'CLAUDE_OAUTH_ERROR',
         disabled: 'CLAUDE_OAUTH_MANUALLY_DISABLED'
       },
@@ -137,6 +99,12 @@ class WebhookNotifier {
         error: 'GEMINI_ERROR',
         unauthorized: 'GEMINI_UNAUTHORIZED',
         disabled: 'GEMINI_MANUALLY_DISABLED'
+      },
+      openai: {
+        error: 'OPENAI_ERROR',
+        unauthorized: 'OPENAI_UNAUTHORIZED',
+        blocked: 'OPENAI_RATE_LIMITED',
+        disabled: 'OPENAI_MANUALLY_DISABLED'
       }
     }
 

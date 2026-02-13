@@ -32,13 +32,28 @@ const config = {
     enableTLS: process.env.REDIS_ENABLE_TLS === 'true'
   },
 
+  // 🔗 会话管理配置
+  session: {
+    // 粘性会话TTL配置（小时），默认1小时
+    stickyTtlHours: parseFloat(process.env.STICKY_SESSION_TTL_HOURS) || 1,
+    // 续期阈值（分钟），默认0分钟（不续期）
+    renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0
+  },
+
   // 🎯 Claude API配置
   claude: {
     apiUrl: process.env.CLAUDE_API_URL || 'https://api.anthropic.com/v1/messages',
     apiVersion: process.env.CLAUDE_API_VERSION || '2023-06-01',
     betaHeader:
       process.env.CLAUDE_BETA_HEADER ||
-      'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14'
+      'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
+    overloadHandling: {
+      enabled: (() => {
+        const minutes = parseInt(process.env.CLAUDE_OVERLOAD_HANDLING_MINUTES) || 0
+        // 验证配置值：限制在0-1440分钟(24小时)内
+        return Math.max(0, Math.min(minutes, 1440))
+      })()
+    }
   },
 
   // ☁️ Bedrock API配置
@@ -56,9 +71,38 @@ const config = {
 
   // 🌐 代理配置
   proxy: {
-    timeout: parseInt(process.env.DEFAULT_PROXY_TIMEOUT) || 30000,
-    maxRetries: parseInt(process.env.MAX_PROXY_RETRIES) || 3
+    timeout: parseInt(process.env.DEFAULT_PROXY_TIMEOUT) || 600000, // 10分钟
+    maxRetries: parseInt(process.env.MAX_PROXY_RETRIES) || 3,
+    // 连接池与 Keep-Alive 配置（默认关闭，需要显式开启）
+    keepAlive: (() => {
+      if (process.env.PROXY_KEEP_ALIVE === undefined || process.env.PROXY_KEEP_ALIVE === '') {
+        return false
+      }
+      return process.env.PROXY_KEEP_ALIVE === 'true'
+    })(),
+    maxSockets: (() => {
+      if (process.env.PROXY_MAX_SOCKETS === undefined || process.env.PROXY_MAX_SOCKETS === '') {
+        return undefined
+      }
+      const parsed = parseInt(process.env.PROXY_MAX_SOCKETS)
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+    })(),
+    maxFreeSockets: (() => {
+      if (
+        process.env.PROXY_MAX_FREE_SOCKETS === undefined ||
+        process.env.PROXY_MAX_FREE_SOCKETS === ''
+      ) {
+        return undefined
+      }
+      const parsed = parseInt(process.env.PROXY_MAX_FREE_SOCKETS)
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+    })(),
+    // IP协议族配置：true=IPv4, false=IPv6, 默认IPv4（兼容性更好）
+    useIPv4: process.env.PROXY_USE_IPV4 !== 'false' // 默认 true，只有明确设置为 'false' 才使用 IPv6
   },
+
+  // ⏱️ 请求超时配置
+  requestTimeout: parseInt(process.env.REQUEST_TIMEOUT) || 600000, // 默认 10 分钟
 
   // 📈 使用限制
   limits: {
@@ -79,7 +123,8 @@ const config = {
     tokenUsageRetention: parseInt(process.env.TOKEN_USAGE_RETENTION) || 2592000000, // 30天
     healthCheckInterval: parseInt(process.env.HEALTH_CHECK_INTERVAL) || 60000, // 1分钟
     timezone: process.env.SYSTEM_TIMEZONE || 'Asia/Shanghai', // 默认UTC+8（中国时区）
-    timezoneOffset: parseInt(process.env.TIMEZONE_OFFSET) || 8 // UTC偏移小时数，默认+8
+    timezoneOffset: parseInt(process.env.TIMEZONE_OFFSET) || 8, // UTC偏移小时数，默认+8
+    metricsWindow: parseInt(process.env.METRICS_WINDOW) || 5 // 实时指标统计窗口（分钟）
   },
 
   // 🎨 Web界面配置
@@ -93,36 +138,56 @@ const config = {
     sessionSecret: process.env.WEB_SESSION_SECRET || 'CHANGE-THIS-SESSION-SECRET'
   },
 
-  // 🔒 客户端限制配置
-  clientRestrictions: {
-    // 预定义的客户端列表
-    predefinedClients: [
-      {
-        id: 'claude_code',
-        name: 'ClaudeCode',
-        description: 'Official Claude Code CLI',
-        // 匹配 Claude CLI 的 User-Agent
-        // 示例: claude-cli/1.0.58 (external, cli)
-        userAgentPattern: /^claude-cli\/[\d.]+\s+\(/i
-      },
-      {
-        id: 'gemini_cli',
-        name: 'Gemini-CLI',
-        description: 'Gemini Command Line Interface',
-        // 匹配 GeminiCLI 的 User-Agent
-        // 示例: GeminiCLI/v18.20.8 (darwin; arm64)
-        userAgentPattern: /^GeminiCLI\/v?[\d.]+\s+\(/i
+  // 🔐 LDAP 认证配置
+  ldap: {
+    enabled: process.env.LDAP_ENABLED === 'true',
+    server: {
+      url: process.env.LDAP_URL || 'ldap://localhost:389',
+      bindDN: process.env.LDAP_BIND_DN || 'cn=admin,dc=example,dc=com',
+      bindCredentials: process.env.LDAP_BIND_PASSWORD || 'admin',
+      searchBase: process.env.LDAP_SEARCH_BASE || 'dc=example,dc=com',
+      searchFilter: process.env.LDAP_SEARCH_FILTER || '(uid={{username}})',
+      searchAttributes: process.env.LDAP_SEARCH_ATTRIBUTES
+        ? process.env.LDAP_SEARCH_ATTRIBUTES.split(',')
+        : ['dn', 'uid', 'cn', 'mail', 'givenName', 'sn'],
+      timeout: parseInt(process.env.LDAP_TIMEOUT) || 5000,
+      connectTimeout: parseInt(process.env.LDAP_CONNECT_TIMEOUT) || 10000,
+      // TLS/SSL 配置
+      tls: {
+        // 是否忽略证书错误 (用于自签名证书)
+        rejectUnauthorized: process.env.LDAP_TLS_REJECT_UNAUTHORIZED !== 'false', // 默认验证证书，设置为false则忽略
+        // CA证书文件路径 (可选，用于自定义CA证书)
+        ca: process.env.LDAP_TLS_CA_FILE
+          ? require('fs').readFileSync(process.env.LDAP_TLS_CA_FILE)
+          : undefined,
+        // 客户端证书文件路径 (可选，用于双向认证)
+        cert: process.env.LDAP_TLS_CERT_FILE
+          ? require('fs').readFileSync(process.env.LDAP_TLS_CERT_FILE)
+          : undefined,
+        // 客户端私钥文件路径 (可选，用于双向认证)
+        key: process.env.LDAP_TLS_KEY_FILE
+          ? require('fs').readFileSync(process.env.LDAP_TLS_KEY_FILE)
+          : undefined,
+        // 服务器名称 (用于SNI，可选)
+        servername: process.env.LDAP_TLS_SERVERNAME || undefined
       }
-      // 添加自定义客户端示例：
-      // {
-      //   id: 'custom_client',
-      //   name: 'My Custom Client',
-      //   description: 'My custom API client',
-      //   userAgentPattern: /^MyClient\/[\d\.]+/i
-      // }
-    ],
-    // 是否允许自定义客户端（未来功能）
-    allowCustomClients: process.env.ALLOW_CUSTOM_CLIENTS === 'true'
+    },
+    userMapping: {
+      username: process.env.LDAP_USER_ATTR_USERNAME || 'uid',
+      displayName: process.env.LDAP_USER_ATTR_DISPLAY_NAME || 'cn',
+      email: process.env.LDAP_USER_ATTR_EMAIL || 'mail',
+      firstName: process.env.LDAP_USER_ATTR_FIRST_NAME || 'givenName',
+      lastName: process.env.LDAP_USER_ATTR_LAST_NAME || 'sn'
+    }
+  },
+
+  // 👥 用户管理配置
+  userManagement: {
+    enabled: process.env.USER_MANAGEMENT_ENABLED === 'true',
+    defaultUserRole: process.env.DEFAULT_USER_ROLE || 'user',
+    userSessionTimeout: parseInt(process.env.USER_SESSION_TIMEOUT) || 86400000, // 24小时
+    maxApiKeysPerUser: parseInt(process.env.MAX_API_KEYS_PER_USER) || 1,
+    allowUserDeleteApiKeys: process.env.ALLOW_USER_DELETE_API_KEYS === 'true' // 默认不允许用户删除自己的API Keys
   },
 
   // 📢 Webhook通知配置
@@ -139,6 +204,38 @@ const config = {
   development: {
     debug: process.env.DEBUG === 'true',
     hotReload: process.env.HOT_RELOAD === 'true'
+  },
+
+  // 💰 账户余额相关配置
+  accountBalance: {
+    // 是否允许执行自定义余额脚本（安全开关）
+    // 说明：脚本能力可发起任意 HTTP 请求并在服务端执行 extractor 逻辑，建议仅在受控环境开启
+    // 默认保持开启；如需禁用请显式设置：BALANCE_SCRIPT_ENABLED=false
+    enableBalanceScript: process.env.BALANCE_SCRIPT_ENABLED !== 'false'
+  },
+
+  // 📬 用户消息队列配置
+  // 优化说明：锁在请求发送成功后立即释放（而非请求完成后），因为 Claude API 限流基于请求发送时刻计算
+  userMessageQueue: {
+    enabled: process.env.USER_MESSAGE_QUEUE_ENABLED === 'true', // 默认关闭
+    delayMs: parseInt(process.env.USER_MESSAGE_QUEUE_DELAY_MS) || 200, // 请求间隔（毫秒）
+    timeoutMs: parseInt(process.env.USER_MESSAGE_QUEUE_TIMEOUT_MS) || 5000, // 队列等待超时（毫秒），锁持有时间短，无需长等待
+    lockTtlMs: parseInt(process.env.USER_MESSAGE_QUEUE_LOCK_TTL_MS) || 5000 // 锁TTL（毫秒），5秒足以覆盖请求发送
+  },
+
+  // 🎫 额度卡兑换上限配置（防盗刷）
+  quotaCardLimits: {
+    enabled: process.env.QUOTA_CARD_LIMITS_ENABLED !== 'false', // 默认启用
+    maxExpiryDays: parseInt(process.env.QUOTA_CARD_MAX_EXPIRY_DAYS) || 90, // 最大有效期距今天数
+    maxTotalCostLimit: parseFloat(process.env.QUOTA_CARD_MAX_TOTAL_COST_LIMIT) || 1000 // 最大总额度（美元）
+  },
+
+  // ⏱️ 上游错误自动暂停配置
+  upstreamError: {
+    serverErrorTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_5XX_TTL_SECONDS) || 300, // 5xx错误暂停秒数
+    overloadTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_OVERLOAD_TTL_SECONDS) || 600, // 529过载暂停秒数
+    authErrorTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_AUTH_TTL_SECONDS) || 1800, // 401/403认证错误暂停秒数
+    timeoutTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_TIMEOUT_TTL_SECONDS) || 300 // 504超时暂停秒数
   }
 }
 
