@@ -962,6 +962,89 @@ class ClaudeRelayService {
     }
   }
 
+  // 🔧 修补孤立的 tool_use（缺少对应 tool_result）
+  // 客户端在长对话中可能截断历史消息，导致 tool_use 丢失对应的 tool_result，
+  // 上游 Claude API 严格校验每个 tool_use 必须紧跟 tool_result，否则返回 400。
+  _patchOrphanedToolUse(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return messages
+    }
+
+    const SYNTHETIC_TEXT = '[tool_result missing; tool execution interrupted]'
+    const makeSyntheticResult = (toolUseId) => ({
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      is_error: true,
+      content: [{ type: 'text', text: SYNTHETIC_TEXT }]
+    })
+
+    const pendingToolUseIds = []
+    const patched = []
+
+    for (const message of messages) {
+      if (!message || !Array.isArray(message.content)) {
+        patched.push(message)
+        continue
+      }
+
+      if (message.role === 'assistant') {
+        if (pendingToolUseIds.length > 0) {
+          patched.push({
+            role: 'user',
+            content: pendingToolUseIds.map(makeSyntheticResult)
+          })
+          logger.warn(
+            `🔧 Patched ${pendingToolUseIds.length} orphaned tool_use(s): ${pendingToolUseIds.join(', ')}`
+          )
+          pendingToolUseIds.length = 0
+        }
+
+        const toolUseIds = message.content
+          .filter((part) => part?.type === 'tool_use' && typeof part.id === 'string')
+          .map((part) => part.id)
+        if (toolUseIds.length > 0) {
+          pendingToolUseIds.push(...toolUseIds)
+        }
+
+        patched.push(message)
+        continue
+      }
+
+      if (message.role === 'user' && pendingToolUseIds.length > 0) {
+        const toolResultIds = new Set(
+          message.content
+            .filter((p) => p?.type === 'tool_result' && typeof p.tool_use_id === 'string')
+            .map((p) => p.tool_use_id)
+        )
+        const missing = pendingToolUseIds.filter((id) => !toolResultIds.has(id))
+
+        if (missing.length > 0) {
+          const synthetic = missing.map(makeSyntheticResult)
+          logger.warn(
+            `🔧 Patched ${missing.length} missing tool_result(s) in user message: ${missing.join(', ')}`
+          )
+          message.content = [...synthetic, ...message.content]
+        }
+
+        pendingToolUseIds.length = 0
+      }
+
+      patched.push(message)
+    }
+
+    if (pendingToolUseIds.length > 0) {
+      patched.push({
+        role: 'user',
+        content: pendingToolUseIds.map(makeSyntheticResult)
+      })
+      logger.warn(
+        `🔧 Patched ${pendingToolUseIds.length} trailing orphaned tool_use(s): ${pendingToolUseIds.join(', ')}`
+      )
+    }
+
+    return patched
+  }
+
   // 🔄 处理请求体
   _processRequestBody(body, account = null) {
     if (!body) {
@@ -970,6 +1053,8 @@ class ClaudeRelayService {
 
     // 使用 safeClone 替代 JSON.parse(JSON.stringify()) 提升性能
     const processedBody = safeClone(body)
+
+    processedBody.messages = this._patchOrphanedToolUse(processedBody.messages)
 
     // 验证并限制max_tokens参数
     this._validateAndLimitMaxTokens(processedBody)
