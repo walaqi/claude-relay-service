@@ -1945,7 +1945,7 @@ async function handleStreamGenerateContent(req, res) {
     res.setHeader('X-Accel-Buffering', 'no')
 
     // 处理流式响应并捕获usage数据
-    let streamBuffer = ''
+    let streamBuffer = '' // 移动到 data 事件处理器外部，保持状态
     let totalUsage = {
       promptTokenCount: 0,
       candidatesTokenCount: 0,
@@ -1981,27 +1981,44 @@ async function handleStreamGenerateContent(req, res) {
         setImmediate(() => {
           try {
             const chunkStr = chunk.toString()
-            if (!chunkStr.trim() || !chunkStr.includes('usageMetadata')) {
-              return
+            streamBuffer += chunkStr
+            
+            // 如果 buffer 过大，进行保护性清理（防止内存泄漏）
+            if (streamBuffer.length > 1024 * 1024) { // 1MB
+               streamBuffer = streamBuffer.slice(-1024 * 64) // 只保留最后 64KB
             }
 
-            streamBuffer += chunkStr
             const lines = streamBuffer.split('\n')
+            // 保留最后一行（可能不完整）
             streamBuffer = lines.pop() || ''
 
             for (const line of lines) {
-              if (!line.trim() || !line.includes('usageMetadata')) {
+              // 只处理可能包含数据的行
+              if (!line.trim() || !line.startsWith('data:')) {
                 continue
               }
 
               try {
+                // ��试解析 SSE 行
                 const parsed = parseSSELine(line)
-                if (parsed.type === 'data' && parsed.data.response?.usageMetadata) {
-                  totalUsage = parsed.data.response.usageMetadata
+                
+                // 检查各种可能的 usage 位置
+                let extractedUsage = null
+                
+                if (parsed.type === 'data') {
+                  if (parsed.data.response?.usageMetadata) {
+                    extractedUsage = parsed.data.response.usageMetadata
+                  } else if (parsed.data.usageMetadata) {
+                    extractedUsage = parsed.data.usageMetadata
+                  }
+                }
+
+                if (extractedUsage) {
+                  totalUsage = extractedUsage
                   logger.debug('📊 Captured Gemini usage data:', totalUsage)
                 }
               } catch (parseError) {
-                logger.warn('⚠️ Failed to parse usage line:', parseError.message)
+                // 解析失败忽略，可能是非 JSON 数据
               }
             }
           } catch (error) {
