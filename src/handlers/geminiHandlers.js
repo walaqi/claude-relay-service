@@ -642,6 +642,7 @@ async function handleMessages(req, res) {
           candidatesTokenCount: 0,
           totalTokenCount: 0
         }
+        let streamBuffer = ''
 
         geminiResponse.on('data', (chunk) => {
           try {
@@ -649,7 +650,17 @@ async function handleMessages(req, res) {
             res.write(chunkStr)
 
             // 尝试从 SSE 流中提取 usage 数据
-            const lines = chunkStr.split('\n')
+            streamBuffer += chunkStr
+            
+            // 如果 buffer 过大，进行保护性清理（防止内存泄漏）
+            if (streamBuffer.length > 1024 * 1024) { // 1MB
+               streamBuffer = streamBuffer.slice(-1024 * 64) // 只保留最后 64KB
+            }
+
+            const lines = streamBuffer.split('\n')
+            // 保留最后一行（可能不完整）
+            streamBuffer = lines.pop() || ''
+
             for (const line of lines) {
               if (line.startsWith('data:')) {
                 const data = line.substring(5).trim()
@@ -1977,9 +1988,8 @@ async function handleStreamGenerateContent(req, res) {
           res.write(chunk)
         }
 
-        // 异步提取 usage 数据
-        setImmediate(() => {
-          try {
+        // 提取 usage 数据
+        try {
             const chunkStr = chunk.toString()
             streamBuffer += chunkStr
             
@@ -2024,7 +2034,6 @@ async function handleStreamGenerateContent(req, res) {
           } catch (error) {
             logger.warn('⚠️ Error extracting usage data:', error.message)
           }
-        })
       } catch (error) {
         logger.error('Error processing stream chunk:', error)
       }
@@ -2780,7 +2789,6 @@ async function handleStandardStreamGenerateContent(req, res) {
         res.write(outputChunk)
       }
 
-      setImmediate(() => {
         try {
           const usageSource =
             processedPayload && processedPayload !== '[DONE]' ? processedPayload : dataPayload
@@ -2799,7 +2807,6 @@ async function handleStandardStreamGenerateContent(req, res) {
         } catch (error) {
           // 提取用量失败时忽略
         }
-      })
     }
 
     streamResponse.on('data', (chunk) => {
