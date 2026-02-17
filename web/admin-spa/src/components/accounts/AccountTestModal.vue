@@ -277,7 +277,7 @@ watch(
 // 是否使用 SSE 流式响应
 const useSSE = computed(() => {
   if (!props.account) return false
-  return ['claude', 'claude-console'].includes(props.account.platform)
+  return ['claude', 'claude-console', 'bedrock'].includes(props.account.platform)
 })
 
 // 计算属性
@@ -632,14 +632,14 @@ watch(
         const credentialType = props.account.credentialType
         if (credentialType === 'bearer_token') {
           // Bearer Token 模式使用 Sonnet 4.5
-          selectedModel.value = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'
+          selectedModel.value = 'claude-sonnet-4-5-20250929'
         } else {
           // Access Key 模式使用 Haiku（更快更便宜）
-          selectedModel.value = 'us.anthropic.claude-3-5-haiku-20241022-v1:0'
+          selectedModel.value = 'claude-3-5-haiku-20241022'
         }
       } else {
         // 其他平台使用默认模型
-        selectedModel.value = 'claude-sonnet-4-5-20250929'
+        selectedModel.value = defaultModel.value
       }
     }
   }

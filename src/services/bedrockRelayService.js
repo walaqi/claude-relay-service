@@ -52,13 +52,13 @@ class BedrockRelayService {
       // Bearer Token 模式：AWS SDK >= 3.400.0 会自动检测环境变量
       clientConfig.token = { token: bedrockAccount.bearerToken }
       logger.debug(`🔑 使用 Bearer Token 认证 - 账户: ${bedrockAccount.name || 'unknown'}`)
-    } else {
+    }  else {
       // 检查是否有环境变量凭证
       if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
         clientConfig.credentials = fromEnv()
       } else {
         throw new Error(
-          'AWS凭证未配置。请在Bedrock账户中配置AWS访问密钥或Bearer Token，或设置环境变量AWS_ACCESS_KEY_ID和AWS_SECRET_ACCESS_KEY'
+          'AWS凭证未配置。请在Bedrock账户中配置AWS访问密钥或Bearer Token，或设置环境变量AWS_ACCESS_KEY_ID、AWS_SECRET_ACCESS_KEY 或 AWS_BEARER_TOKEN_BEDROCK'
         )
       }
     }
@@ -455,6 +455,8 @@ class BedrockRelayService {
       'claude-opus-4': 'us.anthropic.claude-opus-4-1-20250805-v1:0',
       'claude-opus-4-1': 'us.anthropic.claude-opus-4-1-20250805-v1:0',
       'claude-opus-4-1-20250805': 'us.anthropic.claude-opus-4-1-20250805-v1:0',
+      // Claude Opus 4
+      'claude-opus-4-20250514': 'us.anthropic.claude-opus-4-20250514-v1:0',
 
       // Claude 3.7 Sonnet
       'claude-3-7-sonnet': 'us.anthropic.claude-3-7-sonnet-20250219-v1:0',
@@ -474,7 +476,11 @@ class BedrockRelayService {
 
       // Claude 3 Haiku
       'claude-3-haiku': 'us.anthropic.claude-3-haiku-20240307-v1:0',
-      'claude-3-haiku-20240307': 'us.anthropic.claude-3-haiku-20240307-v1:0'
+      'claude-3-haiku-20240307': 'us.anthropic.claude-3-haiku-20240307-v1:0',
+
+      // Claude 3 Opus
+      'claude-3-opus': 'us.anthropic.claude-3-opus-20240229-v1:0',
+      'claude-3-opus-20240229': 'us.anthropic.claude-3-opus-20240229-v1:0'
     }
 
     // 如果已经是Bedrock格式，直接返回
