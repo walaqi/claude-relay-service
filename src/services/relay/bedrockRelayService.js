@@ -525,7 +525,9 @@ class BedrockRelayService {
   // Bedrock only supports { type: "ephemeral" } — extra fields like "scope"
   // (added in Claude Code v2.1.38+) cause ValidationException.
   _sanitizeCacheControl(obj) {
-    if (obj == null || typeof obj !== 'object') return obj
+    if (obj === null || obj === undefined || typeof obj !== 'object') {
+      return obj
+    }
 
     if (Array.isArray(obj)) {
       obj.forEach((item) => this._sanitizeCacheControl(item))
