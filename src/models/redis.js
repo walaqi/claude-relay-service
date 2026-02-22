@@ -50,6 +50,82 @@ function getWeekStringInTimezone(date = new Date()) {
   return `${year}-W${String(weekNumber).padStart(2, '0')}`
 }
 
+// 获取基于自定义重置日/时的周期标识符 (YYYY-MM-DDThh 格式)
+// resetDay: 1-7 (周一到周日)，默认 1 (周一)
+// resetHour: 0-23，默认 0 (00:00)
+function getPeriodString(resetDay = 1, resetHour = 0, date = new Date()) {
+  const tzDate = getDateInTimezone(date)
+
+  // 当前时区时间的 ISO 星期几 (1=周一 ... 7=周日)
+  const currentDay = tzDate.getUTCDay() || 7
+  const currentHour = tzDate.getUTCHours()
+
+  // 计算距上次重置已过的天数
+  let daysSinceReset = (currentDay - resetDay + 7) % 7
+  // 如果同一天但还没到重置时间，视为上一个周期
+  if (daysSinceReset === 0 && currentHour < resetHour) {
+    daysSinceReset = 7
+  }
+
+  // 回退到周期起始日
+  const periodStart = new Date(tzDate)
+  periodStart.setUTCDate(tzDate.getUTCDate() - daysSinceReset)
+  periodStart.setUTCHours(resetHour, 0, 0, 0)
+
+  const y = periodStart.getUTCFullYear()
+  const m = String(periodStart.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(periodStart.getUTCDate()).padStart(2, '0')
+  const h = String(periodStart.getUTCHours()).padStart(2, '0')
+
+  return `${y}-${m}-${d}T${h}`
+}
+
+// 获取下次重置的真实 UTC 时间（用于 402 响应中的 resetAt）
+// resetDay: 1-7 (周一到周日)，默认 1 (周一)
+// resetHour: 0-23，默认 0 (00:00)
+function getNextResetTime(resetDay = 1, resetHour = 0) {
+  const offset = config.system.timezoneOffset || 8
+  const tzDate = getDateInTimezone(new Date())
+
+  const currentDay = tzDate.getUTCDay() || 7
+  const currentHour = tzDate.getUTCHours()
+
+  let daysUntilReset = (resetDay - currentDay + 7) % 7
+  // 如果同一天但已过重置时间，等到下周
+  if (daysUntilReset === 0 && currentHour >= resetHour) {
+    daysUntilReset = 7
+  }
+
+  // 构造时区下的重置时间
+  const resetTz = new Date(tzDate)
+  resetTz.setUTCDate(tzDate.getUTCDate() + daysUntilReset)
+  resetTz.setUTCHours(resetHour, 0, 0, 0)
+
+  // 转换回真实 UTC：减去时区偏移
+  const resetUtc = new Date(resetTz.getTime() - offset * 3600000)
+  return resetUtc
+}
+
+// 获取周期起始日期的 Date 对象（时区下），用于回填时判断日期是否在当前周期内
+// 返回 getDateInTimezone 风格的 Date，可用 getUTC* 获取时区本地值
+function getPeriodStartDate(resetDay = 1, resetHour = 0, date = new Date()) {
+  const tzDate = getDateInTimezone(date)
+
+  const currentDay = tzDate.getUTCDay() || 7
+  const currentHour = tzDate.getUTCHours()
+
+  let daysSinceReset = (currentDay - resetDay + 7) % 7
+  if (daysSinceReset === 0 && currentHour < resetHour) {
+    daysSinceReset = 7
+  }
+
+  const periodStart = new Date(tzDate)
+  periodStart.setUTCDate(tzDate.getUTCDate() - daysSinceReset)
+  periodStart.setUTCHours(resetHour, 0, 0, 0)
+
+  return periodStart
+}
+
 // 并发队列相关常量
 const QUEUE_STATS_TTL_SECONDS = 86400 * 7 // 统计计数保留 7 天
 const WAIT_TIME_TTL_SECONDS = 86400 // 等待时间样本保留 1 天（滚动窗口，无需长期保留）
@@ -1753,31 +1829,31 @@ class RedisClient {
     }
   }
 
-  // 💰 获取本周 Opus 费用
-  async getWeeklyOpusCost(keyId) {
-    const currentWeek = getWeekStringInTimezone()
-    const costKey = `usage:opus:weekly:${keyId}:${currentWeek}`
+  // 💰 获取本周 Opus 费用（支持自定义重置周期）
+  async getWeeklyOpusCost(keyId, resetDay = 1, resetHour = 0) {
+    const periodStr = getPeriodString(resetDay, resetHour)
+    const costKey = `usage:opus:weekly:${keyId}:${periodStr}`
     const cost = await this.client.get(costKey)
     const result = parseFloat(cost || 0)
     logger.debug(
-      `💰 Getting weekly Opus cost for ${keyId}, week: ${currentWeek}, key: ${costKey}, value: ${cost}, result: ${result}`
+      `💰 Getting weekly Opus cost for ${keyId}, period: ${periodStr}, key: ${costKey}, value: ${cost}, result: ${result}`
     )
     return result
   }
 
-  // 💰 增加本周 Opus 费用（支持倍率成本和真实成本）
+  // 💰 增加本周 Opus 费用（支持倍率成本和真实成本，支持自定义重置周期）
   // amount: 倍率后的成本（用于限额校验）
   // realAmount: 真实成本（用于对账），如果不传则等于 amount
-  async incrementWeeklyOpusCost(keyId, amount, realAmount = null) {
-    const currentWeek = getWeekStringInTimezone()
-    const weeklyKey = `usage:opus:weekly:${keyId}:${currentWeek}`
+  async incrementWeeklyOpusCost(keyId, amount, realAmount = null, resetDay = 1, resetHour = 0) {
+    const periodStr = getPeriodString(resetDay, resetHour)
+    const weeklyKey = `usage:opus:weekly:${keyId}:${periodStr}`
     const totalKey = `usage:opus:total:${keyId}`
-    const realWeeklyKey = `usage:opus:real:weekly:${keyId}:${currentWeek}`
+    const realWeeklyKey = `usage:opus:real:weekly:${keyId}:${periodStr}`
     const realTotalKey = `usage:opus:real:total:${keyId}`
     const actualRealAmount = realAmount !== null ? realAmount : amount
 
     logger.debug(
-      `💰 Incrementing weekly Opus cost for ${keyId}, week: ${currentWeek}, rated: $${amount}, real: $${actualRealAmount}`
+      `💰 Incrementing weekly Opus cost for ${keyId}, period: ${periodStr}, rated: $${amount}, real: $${actualRealAmount}`
     )
 
     // 使用 pipeline 批量执行，提高性能
@@ -1794,13 +1870,13 @@ class RedisClient {
     logger.debug(`💰 Opus cost incremented successfully, new weekly total: $${results[0][1]}`)
   }
 
-  // 💰 覆盖设置本周 Opus 费用（用于启动回填/迁移）
-  async setWeeklyOpusCost(keyId, amount, weekString = null) {
-    const currentWeek = weekString || getWeekStringInTimezone()
-    const weeklyKey = `usage:opus:weekly:${keyId}:${currentWeek}`
+  // 💰 覆盖设置本周 Opus 费用（用于启动回填/迁移，支持自定义周期标识）
+  async setWeeklyOpusCost(keyId, amount, periodString = null, resetDay = 1, resetHour = 0) {
+    const currentPeriod = periodString || getPeriodString(resetDay, resetHour)
+    const weeklyKey = `usage:opus:weekly:${keyId}:${currentPeriod}`
 
     await this.client.set(weeklyKey, String(amount || 0))
-    // 保留 2 周，足够覆盖"当前周 + 上周"查看/回填
+    // 保留 2 周，足够覆盖"当前周期 + 上周期"查看/回填
     await this.client.expire(weeklyKey, 14 * 24 * 3600)
   }
 
@@ -3716,6 +3792,9 @@ redisClient.getDateInTimezone = getDateInTimezone
 redisClient.getDateStringInTimezone = getDateStringInTimezone
 redisClient.getHourInTimezone = getHourInTimezone
 redisClient.getWeekStringInTimezone = getWeekStringInTimezone
+redisClient.getPeriodString = getPeriodString
+redisClient.getNextResetTime = getNextResetTime
+redisClient.getPeriodStartDate = getPeriodStartDate
 
 // ============== 用户消息队列相关方法 ==============
 
