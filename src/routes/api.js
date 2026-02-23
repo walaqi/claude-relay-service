@@ -469,7 +469,9 @@ async function handleMessagesRequest(req, res) {
                 cache_read_input_tokens: cacheReadTokens
               }
               const requestBetaHeader =
-                _headers['anthropic-beta'] || _headers['Anthropic-Beta'] || _headers['ANTHROPIC-BETA']
+                _headers['anthropic-beta'] ||
+                _headers['Anthropic-Beta'] ||
+                _headers['ANTHROPIC-BETA']
               if (requestBetaHeader) {
                 usageObject.request_anthropic_beta = requestBetaHeader
               }

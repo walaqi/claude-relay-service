@@ -566,11 +566,11 @@ class PricingService {
       if (!key.startsWith('fast/')) {
         continue
       }
-      const normalizedFastKey = key
-        .slice('fast/'.length)
-        .toLowerCase()
-        .replace(/[_-]/g, '')
-      if (normalizedFastKey.includes(normalizedModel) || normalizedModel.includes(normalizedFastKey)) {
+      const normalizedFastKey = key.slice('fast/'.length).toLowerCase().replace(/[_-]/g, '')
+      if (
+        normalizedFastKey.includes(normalizedModel) ||
+        normalizedModel.includes(normalizedFastKey)
+      ) {
         logger.debug(`💰 Found fuzzy fast pricing for ${modelName}: ${key}`)
         return value
       }
@@ -700,7 +700,7 @@ class PricingService {
 
     // 确定实际使用的输入价格（普通或 200K+ 高档价格）
     // Claude 模型在 200K+ 场景下如果缺少官方字段，按 2 倍输入价兜底
-    let actualInputPrice = useLongContextPricing
+    const actualInputPrice = useLongContextPricing
       ? hasInput200kPrice
         ? pricing.input_cost_per_token_above_200k_tokens
         : isClaudeModel
@@ -712,7 +712,7 @@ class PricingService {
     const hasOutput200kPrice =
       pricing.output_cost_per_token_above_200k_tokens !== null &&
       pricing.output_cost_per_token_above_200k_tokens !== undefined
-    let actualOutputPrice = useLongContextPricing
+    const actualOutputPrice = useLongContextPricing
       ? hasOutput200kPrice
         ? pricing.output_cost_per_token_above_200k_tokens
         : baseOutputPrice
