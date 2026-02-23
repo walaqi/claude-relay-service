@@ -1599,6 +1599,8 @@ class ApiKeyService {
             outputTokens,
             cacheCreateTokens,
             cacheReadTokens,
+            0, // ephemeral5mTokens - recordUsage 不含详细缓存数据
+            0, // ephemeral1hTokens - recordUsage 不含详细缓存数据
             model,
             isLongContextRequest
           )
@@ -1834,6 +1836,8 @@ class ApiKeyService {
             outputTokens,
             cacheCreateTokens,
             cacheReadTokens,
+            ephemeral5mTokens,
+            ephemeral1hTokens,
             model,
             costInfo.isLongContextRequest || false
           )

@@ -1286,6 +1286,8 @@ class RedisClient {
     outputTokens = 0,
     cacheCreateTokens = 0,
     cacheReadTokens = 0,
+    ephemeral5mTokens = 0,
+    ephemeral1hTokens = 0,
     model = 'unknown',
     isLongContextRequest = false
   ) {
@@ -1317,6 +1319,8 @@ class RedisClient {
     const finalOutputTokens = outputTokens || 0
     const finalCacheCreateTokens = cacheCreateTokens || 0
     const finalCacheReadTokens = cacheReadTokens || 0
+    const finalEphemeral5mTokens = ephemeral5mTokens || 0
+    const finalEphemeral1hTokens = ephemeral1hTokens || 0
     const actualTotalTokens =
       finalInputTokens + finalOutputTokens + finalCacheCreateTokens + finalCacheReadTokens
     const coreTokens = finalInputTokens + finalOutputTokens
@@ -1329,6 +1333,8 @@ class RedisClient {
       this.client.hincrby(accountKey, 'totalOutputTokens', finalOutputTokens),
       this.client.hincrby(accountKey, 'totalCacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountKey, 'totalCacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountKey, 'totalEphemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountKey, 'totalEphemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountKey, 'totalAllTokens', actualTotalTokens),
       this.client.hincrby(accountKey, 'totalRequests', 1),
 
@@ -1338,6 +1344,8 @@ class RedisClient {
       this.client.hincrby(accountDaily, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountDaily, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountDaily, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountDaily, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountDaily, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountDaily, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountDaily, 'requests', 1),
 
@@ -1347,6 +1355,8 @@ class RedisClient {
       this.client.hincrby(accountMonthly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountMonthly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountMonthly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountMonthly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountMonthly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountMonthly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountMonthly, 'requests', 1),
 
@@ -1356,6 +1366,8 @@ class RedisClient {
       this.client.hincrby(accountHourly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountHourly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountHourly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountHourly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountHourly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountHourly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountHourly, 'requests', 1),
 
@@ -1376,6 +1388,16 @@ class RedisClient {
         `model:${normalizedModel}:cacheReadTokens`,
         finalCacheReadTokens
       ),
+      this.client.hincrby(
+        accountHourly,
+        `model:${normalizedModel}:ephemeral5mTokens`,
+        finalEphemeral5mTokens
+      ),
+      this.client.hincrby(
+        accountHourly,
+        `model:${normalizedModel}:ephemeral1hTokens`,
+        finalEphemeral1hTokens
+      ),
       this.client.hincrby(accountHourly, `model:${normalizedModel}:allTokens`, actualTotalTokens),
       this.client.hincrby(accountHourly, `model:${normalizedModel}:requests`, 1),
 
@@ -1384,6 +1406,8 @@ class RedisClient {
       this.client.hincrby(accountModelDaily, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountModelDaily, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountModelDaily, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountModelDaily, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountModelDaily, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountModelDaily, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountModelDaily, 'requests', 1),
 
@@ -1392,6 +1416,8 @@ class RedisClient {
       this.client.hincrby(accountModelMonthly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountModelMonthly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountModelMonthly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountModelMonthly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountModelMonthly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountModelMonthly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountModelMonthly, 'requests', 1),
 
@@ -1400,6 +1426,8 @@ class RedisClient {
       this.client.hincrby(accountModelHourly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountModelHourly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountModelHourly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountModelHourly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountModelHourly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountModelHourly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountModelHourly, 'requests', 1),
 
@@ -1867,6 +1895,16 @@ class RedisClient {
           cache_read_input_tokens: parseInt(modelUsage.cacheReadTokens || 0)
         }
 
+        // 添加 cache_creation 子对象以支持精确 ephemeral 定价
+        const eph5m = parseInt(modelUsage.ephemeral5mTokens) || 0
+        const eph1h = parseInt(modelUsage.ephemeral1hTokens) || 0
+        if (eph5m > 0 || eph1h > 0) {
+          usage.cache_creation = {
+            ephemeral_5m_input_tokens: eph5m,
+            ephemeral_1h_input_tokens: eph1h
+          }
+        }
+
         const costResult = CostCalculator.calculateCost(usage, model)
         totalCost += costResult.costs.total
 
@@ -1955,6 +1993,16 @@ class RedisClient {
           cache_read_input_tokens: parseInt(modelUsage.cacheReadTokens || 0)
         }
 
+        // 添加 cache_creation 子对象以支持精确 ephemeral 定价
+        const eph5m = parseInt(modelUsage.ephemeral5mTokens) || 0
+        const eph1h = parseInt(modelUsage.ephemeral1hTokens) || 0
+        if (eph5m > 0 || eph1h > 0) {
+          usage.cache_creation = {
+            ephemeral_5m_input_tokens: eph5m,
+            ephemeral_1h_input_tokens: eph1h
+          }
+        }
+
         const costResult = CostCalculator.calculateCost(usage, model)
         costMap.set(accountId, costMap.get(accountId) + costResult.costs.total)
       }
@@ -1996,6 +2044,17 @@ class RedisClient {
           cache_creation_input_tokens: parseInt(modelUsage.cacheCreateTokens || 0),
           cache_read_input_tokens: parseInt(modelUsage.cacheReadTokens || 0)
         }
+
+        // 添加 cache_creation 子对象以支持精确 ephemeral 定价
+        const eph5m = parseInt(modelUsage.ephemeral5mTokens) || 0
+        const eph1h = parseInt(modelUsage.ephemeral1hTokens) || 0
+        if (eph5m > 0 || eph1h > 0) {
+          usage.cache_creation = {
+            ephemeral_5m_input_tokens: eph5m,
+            ephemeral_1h_input_tokens: eph1h
+          }
+        }
+
         const costResult = CostCalculator.calculateCost(usage, model)
         totalCost += costResult.costs.total
       }
@@ -3646,6 +3705,8 @@ class RedisClient {
                   outputTokens: 0,
                   cacheCreateTokens: 0,
                   cacheReadTokens: 0,
+                  ephemeral5mTokens: 0,
+                  ephemeral1hTokens: 0,
                   allTokens: 0,
                   requests: 0
                 }
@@ -3659,6 +3720,10 @@ class RedisClient {
                 modelUsage[modelName].cacheCreateTokens += parseInt(value || 0)
               } else if (metric === 'cacheReadTokens') {
                 modelUsage[modelName].cacheReadTokens += parseInt(value || 0)
+              } else if (metric === 'ephemeral5mTokens') {
+                modelUsage[modelName].ephemeral5mTokens += parseInt(value || 0)
+              } else if (metric === 'ephemeral1hTokens') {
+                modelUsage[modelName].ephemeral1hTokens += parseInt(value || 0)
               } else if (metric === 'allTokens') {
                 modelUsage[modelName].allTokens += parseInt(value || 0)
               } else if (metric === 'requests') {
