@@ -1084,6 +1084,9 @@ class RedisClient {
     pipeline.hincrby(modelDaily, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(modelDaily, 'allTokens', totalTokens)
     pipeline.hincrby(modelDaily, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(modelDaily, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(modelDaily, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // 按模型统计 - 每月
     pipeline.hincrby(modelMonthly, 'inputTokens', finalInputTokens)
@@ -1092,6 +1095,9 @@ class RedisClient {
     pipeline.hincrby(modelMonthly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(modelMonthly, 'allTokens', totalTokens)
     pipeline.hincrby(modelMonthly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(modelMonthly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(modelMonthly, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // API Key级别的模型统计 - 每日
     pipeline.hincrby(keyModelDaily, 'inputTokens', finalInputTokens)
@@ -1136,6 +1142,9 @@ class RedisClient {
     pipeline.hincrby(keyModelAlltime, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(keyModelAlltime, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(keyModelAlltime, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(keyModelAlltime, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(keyModelAlltime, 'ephemeral1hTokens', ephemeral1hTokens)
     // 费用统计
     if (realCost > 0) {
       pipeline.hincrby(keyModelAlltime, 'realCostMicro', Math.round(realCost * 1000000))
@@ -1152,6 +1161,9 @@ class RedisClient {
     pipeline.hincrby(hourly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(hourly, 'allTokens', totalTokens)
     pipeline.hincrby(hourly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(hourly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(hourly, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // 按模型统计 - 每小时
     pipeline.hincrby(modelHourly, 'inputTokens', finalInputTokens)
@@ -1160,6 +1172,9 @@ class RedisClient {
     pipeline.hincrby(modelHourly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(modelHourly, 'allTokens', totalTokens)
     pipeline.hincrby(modelHourly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(modelHourly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(modelHourly, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // API Key级别的模型统计 - 每小时
     pipeline.hincrby(keyModelHourly, 'inputTokens', finalInputTokens)
@@ -1168,6 +1183,9 @@ class RedisClient {
     pipeline.hincrby(keyModelHourly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(keyModelHourly, 'allTokens', totalTokens)
     pipeline.hincrby(keyModelHourly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(keyModelHourly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(keyModelHourly, 'ephemeral1hTokens', ephemeral1hTokens)
     // 费用统计
     if (realCost > 0) {
       pipeline.hincrby(keyModelHourly, 'realCostMicro', Math.round(realCost * 1000000))
@@ -1235,18 +1253,24 @@ class RedisClient {
     pipeline.hincrby('usage:global:total', 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby('usage:global:total', 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby('usage:global:total', 'allTokens', totalTokens)
+    pipeline.hincrby('usage:global:total', 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby('usage:global:total', 'ephemeral1hTokens', ephemeral1hTokens)
     pipeline.hincrby(globalDaily, 'requests', 1)
     pipeline.hincrby(globalDaily, 'inputTokens', finalInputTokens)
     pipeline.hincrby(globalDaily, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(globalDaily, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(globalDaily, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(globalDaily, 'allTokens', totalTokens)
+    pipeline.hincrby(globalDaily, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(globalDaily, 'ephemeral1hTokens', ephemeral1hTokens)
     pipeline.hincrby(globalMonthly, 'requests', 1)
     pipeline.hincrby(globalMonthly, 'inputTokens', finalInputTokens)
     pipeline.hincrby(globalMonthly, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(globalMonthly, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(globalMonthly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(globalMonthly, 'allTokens', totalTokens)
+    pipeline.hincrby(globalMonthly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(globalMonthly, 'ephemeral1hTokens', ephemeral1hTokens)
     pipeline.expire(globalDaily, 86400 * 32)
     pipeline.expire(globalMonthly, 86400 * 365)
 
