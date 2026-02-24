@@ -500,13 +500,20 @@ router.post('/api/user-stats', async (req, res) => {
         dailyCostLimit: fullKeyData.dailyCostLimit || 0,
         totalCostLimit: fullKeyData.totalCostLimit || 0,
         weeklyOpusCostLimit: parseFloat(fullKeyData.weeklyOpusCostLimit) || 0, // Opus 周费用限制
+        weeklyResetDay: parseInt(fullKeyData.weeklyResetDay) || 1, // 周费用重置日 (1-7)
+        weeklyResetHour: parseInt(fullKeyData.weeklyResetHour) || 0, // 周费用重置时 (0-23)
         // 当前使用量
         currentWindowRequests,
         currentWindowTokens,
         currentWindowCost, // 新增：当前窗口费用
         currentDailyCost,
         currentTotalCost: totalCost,
-        weeklyOpusCost: (await redis.getWeeklyOpusCost(keyId)) || 0, // 当前 Opus 周费用
+        weeklyOpusCost:
+          (await redis.getWeeklyOpusCost(
+            keyId,
+            parseInt(fullKeyData.weeklyResetDay) || 1,
+            parseInt(fullKeyData.weeklyResetHour) || 0
+          )) || 0, // 当前 Opus 周费用
         // 时间窗口信息
         windowStartTime,
         windowEndTime,
