@@ -4,7 +4,7 @@ const config = require('../../config/config')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const serviceRatesService = require('./serviceRatesService')
-const { isOpusModel } = require('../utils/modelHelper')
+const { isClaudeFamilyModel } = require('../utils/modelHelper')
 
 const ACCOUNT_TYPE_CONFIG = {
   claude: { prefix: 'claude:account:' },
@@ -1599,6 +1599,8 @@ class ApiKeyService {
             outputTokens,
             cacheCreateTokens,
             cacheReadTokens,
+            0, // ephemeral5mTokens - recordUsage 不含详细缓存数据
+            0, // ephemeral1hTokens - recordUsage 不含详细缓存数据
             model,
             isLongContextRequest
           )
@@ -1649,7 +1651,7 @@ class ApiKeyService {
   async recordOpusCost(keyId, ratedCost, realCost, model, accountType) {
     try {
       // 判断是否为 Claude 系列模型（包含 Bedrock 格式等）
-      if (!isOpusModel(model)) {
+      if (!isClaudeFamilyModel(model)) {
         return
       }
 
@@ -1834,6 +1836,8 @@ class ApiKeyService {
             outputTokens,
             cacheCreateTokens,
             cacheReadTokens,
+            ephemeral5mTokens,
+            ephemeral1hTokens,
             model,
             costInfo.isLongContextRequest || false
           )

@@ -1289,6 +1289,8 @@ async function calculateKeyStats(keyId, timeRange, startDate, endDate) {
         outputTokens: 0,
         cacheCreateTokens: 0,
         cacheReadTokens: 0,
+        ephemeral5mTokens: 0,
+        ephemeral1hTokens: 0,
         requests: 0
       })
     }
@@ -1300,6 +1302,10 @@ async function calculateKeyStats(keyId, timeRange, startDate, endDate) {
       parseInt(data.totalCacheCreateTokens) || parseInt(data.cacheCreateTokens) || 0
     stats.cacheReadTokens +=
       parseInt(data.totalCacheReadTokens) || parseInt(data.cacheReadTokens) || 0
+    stats.ephemeral5mTokens +=
+      parseInt(data.totalEphemeral5mTokens) || parseInt(data.ephemeral5mTokens) || 0
+    stats.ephemeral1hTokens +=
+      parseInt(data.totalEphemeral1hTokens) || parseInt(data.ephemeral1hTokens) || 0
     stats.requests += parseInt(data.totalRequests) || parseInt(data.requests) || 0
 
     totalRequests += parseInt(data.totalRequests) || parseInt(data.requests) || 0
@@ -1318,15 +1324,22 @@ async function calculateKeyStats(keyId, timeRange, startDate, endDate) {
     cacheCreateTokens += stats.cacheCreateTokens
     cacheReadTokens += stats.cacheReadTokens
 
-    const costResult = CostCalculator.calculateCost(
-      {
-        input_tokens: stats.inputTokens,
-        output_tokens: stats.outputTokens,
-        cache_creation_input_tokens: stats.cacheCreateTokens,
-        cache_read_input_tokens: stats.cacheReadTokens
-      },
-      model
-    )
+    const costUsage = {
+      input_tokens: stats.inputTokens,
+      output_tokens: stats.outputTokens,
+      cache_creation_input_tokens: stats.cacheCreateTokens,
+      cache_read_input_tokens: stats.cacheReadTokens
+    }
+
+    // 如果有 ephemeral 5m/1h 拆分数据，添加 cache_creation 子对象以实现精确计费
+    if (stats.ephemeral5mTokens > 0 || stats.ephemeral1hTokens > 0) {
+      costUsage.cache_creation = {
+        ephemeral_5m_input_tokens: stats.ephemeral5mTokens,
+        ephemeral_1h_input_tokens: stats.ephemeral1hTokens
+      }
+    }
+
+    const costResult = CostCalculator.calculateCost(costUsage, model)
     totalCost += costResult.costs.total
   }
 
