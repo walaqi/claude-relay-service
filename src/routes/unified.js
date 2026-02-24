@@ -2,10 +2,10 @@ const express = require('express')
 const { authenticateApiKey } = require('../middleware/auth')
 const logger = require('../utils/logger')
 const { handleChatCompletion } = require('./openaiClaudeRoutes')
-// 从 handlers/geminiHandlers.js 导入处理函数
+// 从 handlers/geminiHandlers.js 导入 standard 处理函数（支持 OAuth + API Key 双账户类型）
 const {
-  handleGenerateContent: geminiHandleGenerateContent,
-  handleStreamGenerateContent: geminiHandleStreamGenerateContent
+  handleStandardGenerateContent: geminiHandleGenerateContent,
+  handleStandardStreamGenerateContent: geminiHandleStreamGenerateContent
 } = require('../handlers/geminiHandlers')
 const openaiRoutes = require('./openaiRoutes')
 const apiKeyService = require('../services/apiKeyService')
