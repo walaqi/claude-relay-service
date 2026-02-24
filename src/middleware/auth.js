@@ -1278,7 +1278,7 @@ const authenticateApiKey = async (req, res, next) => {
           return res.status(402).json({
             error: {
               type: 'insufficient_quota',
-              message: `已达到 Opus 模型周费用限制 ($${weeklyOpusCostLimit})`,
+              message: `已达到 Claude 模型周费用限制 ($${weeklyOpusCostLimit})`,
               code: 'weekly_opus_cost_limit_exceeded'
             },
             currentCost: weeklyOpusCost,
