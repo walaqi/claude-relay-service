@@ -189,6 +189,17 @@ async function handleMessagesRequest(req, res) {
       }
     }
 
+    // 拦截 1M 上下文窗口请求（anthropic-beta 包含 context-1m）
+    const betaHeader = (req.headers['anthropic-beta'] || '').toLowerCase()
+    if (betaHeader.includes('context-1m')) {
+      return res.status(403).json({
+        error: {
+          type: 'forbidden',
+          message: '暂不支持 1M 上下文窗口，请切换为非 [1m] 模型'
+        }
+      })
+    }
+
     logger.api('📥 /v1/messages request received', {
       model: req.body.model || null,
       forcedVendor,
