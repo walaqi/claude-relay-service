@@ -2015,10 +2015,10 @@
 
     <!-- 错误历史弹窗 -->
     <AccountErrorHistoryModal
-      :show="showErrorHistoryModal"
-      :account-type="errorHistoryTarget.accountType"
       :account-id="errorHistoryTarget.accountId"
       :account-name="errorHistoryTarget.accountName"
+      :account-type="errorHistoryTarget.accountType"
+      :show="showErrorHistoryModal"
       @close="showErrorHistoryModal = false"
     />
 

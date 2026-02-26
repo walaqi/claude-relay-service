@@ -109,8 +109,8 @@
                 >
                   {{ expandedIdx === idx ? '收起详情' : '查看详情' }}
                   <i
-                    :class="expandedIdx === idx ? 'fas fa-chevron-up' : 'fas fa-chevron-down'"
                     class="ml-1"
+                    :class="expandedIdx === idx ? 'fas fa-chevron-up' : 'fas fa-chevron-down'"
                   />
                 </button>
                 <pre
@@ -149,9 +149,9 @@ const PAGE_SIZE = 50
 
 const props = defineProps({
   show: Boolean,
-  accountType: String,
-  accountId: String,
-  accountName: String
+  accountType: { type: String, default: '' },
+  accountId: { type: String, default: '' },
+  accountName: { type: String, default: '' }
 })
 
 const emit = defineEmits(['close'])
