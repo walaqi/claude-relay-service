@@ -1472,14 +1472,22 @@ class ClaudeConsoleRelayService {
         : `${cleanUrl}/v1/messages?beta=true`
       const payload = createClaudeTestPayload(model, { stream: true })
 
-      await sendStreamTestRequest({
+      const extraHeaders = account.userAgent ? { 'User-Agent': account.userAgent } : {}
+      const requestOptions = {
         apiUrl,
-        authorization: `Bearer ${account.apiKey}`,
         responseStream,
         payload,
         proxyAgent: claudeConsoleAccountService._createProxyAgent(account.proxy),
-        extraHeaders: account.userAgent ? { 'User-Agent': account.userAgent } : {}
-      })
+        extraHeaders
+      }
+
+      if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+        requestOptions.extraHeaders['x-api-key'] = account.apiKey
+      } else {
+        requestOptions.authorization = `Bearer ${account.apiKey}`
+      }
+
+      await sendStreamTestRequest(requestOptions)
     } catch (error) {
       logger.error(`❌ Test account connection failed:`, error)
       if (!responseStream.headersSent) {
