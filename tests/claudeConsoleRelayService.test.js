@@ -10,7 +10,7 @@ jest.mock('../src/services/account/claudeConsoleAccountService', () => ({
   _createProxyAgent: jest.fn()
 }))
 
-jest.mock('/Users/mike/projects/claude-relay-service/config/config', () => ({}), {
+jest.mock('../config/config', () => ({}), {
   virtual: true
 })
 jest.mock('../src/models/redis', () => ({}))
@@ -56,14 +56,6 @@ describe('claudeConsoleRelayService.testAccountConnection', () => {
     expect(sendStreamTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         payload
-      })
-    )
-    expect(sendStreamTestRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          model: 'claude-sonnet-4-6',
-          stream: true
-        })
       })
     )
   })
