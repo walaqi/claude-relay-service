@@ -1701,12 +1701,11 @@
                   class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
                 >
                   <option value="responses">Responses（推荐）</option>
-                  <option value="completions">Chat Completions</option>
                   <option value="auto">自动（保持原始路径）</option>
                 </select>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  指定 Provider 支持的端点类型。Responses 会将所有请求路由到 /v1/responses；Chat
-                  Completions 路由到 /v1/chat/completions；自动则保持客户端请求的原始路径
+                  指定 Provider 支持的端点类型。Responses 会将所有请求路由到（包括来自
+                  /v1/chat/completions 的请求会自动转换）；自动则保持客户端请求的原始路径
                 </p>
               </div>
 
@@ -3471,8 +3470,8 @@
                 <option value="auto">自动（保持原始路径）</option>
               </select>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                指定 Provider 支持的端点类型。Responses 路由到 /v1/responses；Chat Completions
-                路由到 /v1/chat/completions；自动则保持原始路径
+                指定 Provider 支持的端点类型。Responses 会将所有请求路由到（包括来自
+                /v1/chat/completions 的请求会自动转换）；自动则保持原始路径
               </p>
             </div>
 
