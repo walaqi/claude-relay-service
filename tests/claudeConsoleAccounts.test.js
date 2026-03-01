@@ -54,4 +54,20 @@ describe('POST /admin/claude-console-accounts/:accountId/test', () => {
     expect(response.body).toEqual({ error: 'model is required' })
     expect(claudeConsoleRelayService.testAccountConnection).not.toHaveBeenCalled()
   })
+
+  it('passes model through to relay service when provided', async () => {
+    const app = buildApp()
+
+    const response = await request(app)
+      .post('/admin/claude-console-accounts/account-1/test')
+      .send({ model: 'claude-sonnet-4-6' })
+
+    expect(response.status).toBe(200)
+    expect(claudeConsoleRelayService.testAccountConnection).toHaveBeenCalledTimes(1)
+    expect(claudeConsoleRelayService.testAccountConnection).toHaveBeenCalledWith(
+      'account-1',
+      expect.any(Object),
+      'claude-sonnet-4-6'
+    )
+  })
 })
