@@ -91,8 +91,22 @@ class OpenAIResponsesRelayService {
       req.once('close', handleClientDisconnect)
       res.once('close', handleClientDisconnect)
 
-      // 构建目标 URL
-      const targetUrl = `${fullAccount.baseApi}${req.path}`
+      // 构建目标 URL（根据 providerEndpoint 配置决定端点路径）
+      const providerEndpoint = fullAccount.providerEndpoint || 'responses'
+      let targetPath = req.path
+      if (providerEndpoint === 'responses' && targetPath.includes('/completions')) {
+        // Provider 仅支持 Responses 端点，将 completions 路径归一化
+        targetPath = '/v1/responses'
+        logger.info(`📝 Normalized path (${req.path}) → /v1/responses (providerEndpoint=responses)`)
+      } else if (providerEndpoint === 'completions' && targetPath.includes('/responses')) {
+        // Provider 仅支持 Completions 端点，将 responses 路径归一化
+        targetPath = '/v1/chat/completions'
+        logger.info(
+          `📝 Normalized path (${req.path}) → /v1/chat/completions (providerEndpoint=completions)`
+        )
+      }
+      // providerEndpoint === 'auto' 时保持原始路径不变
+      const targetUrl = `${fullAccount.baseApi}${targetPath}`
       logger.info(`🎯 Forwarding to: ${targetUrl}`)
 
       // 构建请求头 - 使用统一的 headerFilter 移除 CDN headers
