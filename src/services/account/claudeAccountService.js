@@ -18,6 +18,11 @@ const tokenRefreshService = require('../tokenRefreshService')
 const LRUCache = require('../../utils/lruCache')
 const { formatDateWithTimezone, getISOStringWithTimezone } = require('../../utils/dateHelper')
 const { isOpus45OrNewer } = require('../../utils/modelHelper')
+const {
+  parseBooleanLike,
+  normalizeOptionalNonNegativeInteger,
+  normalizeTempUnavailablePolicyInput
+} = require('../../utils/tempUnavailablePolicy')
 
 /**
  * Check if account is Pro (not Max)
@@ -94,10 +99,20 @@ class ClaudeAccountService {
       expiresAt = null, // 账户订阅到期时间
       extInfo = null, // 额外扩展信息
       maxConcurrency = 0, // 账户级用户消息串行队列：0=使用全局配置，>0=强制启用串行
-      interceptWarmup = false // 拦截预热请求（标题生成、Warmup等）
+      interceptWarmup = false, // 拦截预热请求（标题生成、Warmup等）
+      disableTempUnavailable = false, // 是否禁用账号级临时冷却（temp_unavailable）
+      tempUnavailable503TtlSeconds = null, // 账号级 503 冷却秒数（null 跟随全局）
+      tempUnavailable5xxTtlSeconds = null // 账号级 5xx 冷却秒数（null 跟随全局）
     } = options
 
     const accountId = uuidv4()
+    const normalizedTempUnavailablePolicy = normalizeTempUnavailablePolicyInput({
+      disableTempUnavailable,
+      tempUnavailable503TtlSeconds,
+      tempUnavailable5xxTtlSeconds
+    })
+    const normalized503Ttl = normalizedTempUnavailablePolicy.tempUnavailable503TtlSeconds
+    const normalized5xxTtl = normalizedTempUnavailablePolicy.tempUnavailable5xxTtlSeconds
 
     let accountData
     const normalizedExtInfo = this._normalizeExtInfo(extInfo, claudeAiOauth)
@@ -143,7 +158,11 @@ class ClaudeAccountService {
         // 账户级用户消息串行队列限制
         maxConcurrency: maxConcurrency.toString(),
         // 拦截预热请求
-        interceptWarmup: interceptWarmup.toString()
+        interceptWarmup: interceptWarmup.toString(),
+        // 账号级临时冷却覆盖（空字符串表示跟随全局配置）
+        disableTempUnavailable: normalizedTempUnavailablePolicy.disableTempUnavailable.toString(),
+        tempUnavailable503TtlSeconds: normalized503Ttl !== null ? normalized503Ttl.toString() : '',
+        tempUnavailable5xxTtlSeconds: normalized5xxTtl !== null ? normalized5xxTtl.toString() : ''
       }
     } else {
       // 兼容旧格式
@@ -179,7 +198,11 @@ class ClaudeAccountService {
         // 账户级用户消息串行队列限制
         maxConcurrency: maxConcurrency.toString(),
         // 拦截预热请求
-        interceptWarmup: interceptWarmup.toString()
+        interceptWarmup: interceptWarmup.toString(),
+        // 账号级临时冷却覆盖（空字符串表示跟随全局配置）
+        disableTempUnavailable: normalizedTempUnavailablePolicy.disableTempUnavailable.toString(),
+        tempUnavailable503TtlSeconds: normalized503Ttl !== null ? normalized503Ttl.toString() : '',
+        tempUnavailable5xxTtlSeconds: normalized5xxTtl !== null ? normalized5xxTtl.toString() : ''
       }
     }
 
@@ -228,7 +251,10 @@ class ClaudeAccountService {
       useUnifiedClientId,
       unifiedClientId,
       extInfo: normalizedExtInfo,
-      interceptWarmup
+      interceptWarmup,
+      disableTempUnavailable: normalizedTempUnavailablePolicy.disableTempUnavailable,
+      tempUnavailable503TtlSeconds: normalized503Ttl,
+      tempUnavailable5xxTtlSeconds: normalized5xxTtl
     }
   }
 
@@ -545,6 +571,11 @@ class ClaudeAccountService {
             'subscriptionInfo',
             account.id
           )
+          const normalizedTempUnavailablePolicy = normalizeTempUnavailablePolicyInput({
+            disableTempUnavailable: account.disableTempUnavailable,
+            tempUnavailable503TtlSeconds: account.tempUnavailable503TtlSeconds,
+            tempUnavailable5xxTtlSeconds: account.tempUnavailable5xxTtlSeconds
+          })
 
           return {
             id: account.id,
@@ -619,7 +650,13 @@ class ClaudeAccountService {
             // 账户级用户消息串行队列限制
             maxConcurrency: parseInt(account.maxConcurrency || '0', 10),
             // 拦截预热请求
-            interceptWarmup: account.interceptWarmup === 'true'
+            interceptWarmup: account.interceptWarmup === 'true',
+            // 账号级临时冷却覆盖
+            disableTempUnavailable: normalizedTempUnavailablePolicy.disableTempUnavailable,
+            tempUnavailable503TtlSeconds:
+              normalizedTempUnavailablePolicy.tempUnavailable503TtlSeconds,
+            tempUnavailable5xxTtlSeconds:
+              normalizedTempUnavailablePolicy.tempUnavailable5xxTtlSeconds
           }
         })
       )
@@ -713,7 +750,10 @@ class ClaudeAccountService {
         'subscriptionExpiresAt',
         'extInfo',
         'maxConcurrency',
-        'interceptWarmup'
+        'interceptWarmup',
+        'disableTempUnavailable',
+        'tempUnavailable503TtlSeconds',
+        'tempUnavailable5xxTtlSeconds'
       ]
       const updatedData = { ...accountData }
       let shouldClearAutoStopFields = false
@@ -730,6 +770,14 @@ class ClaudeAccountService {
             updatedData[field] = value ? JSON.stringify(value) : ''
           } else if (field === 'priority' || field === 'maxConcurrency') {
             updatedData[field] = value.toString()
+          } else if (field === 'disableTempUnavailable') {
+            updatedData[field] = parseBooleanLike(value) ? 'true' : 'false'
+          } else if (
+            field === 'tempUnavailable503TtlSeconds' ||
+            field === 'tempUnavailable5xxTtlSeconds'
+          ) {
+            const normalizedTtl = normalizeOptionalNonNegativeInteger(value)
+            updatedData[field] = normalizedTtl !== null ? normalizedTtl.toString() : ''
           } else if (field === 'subscriptionInfo') {
             // 处理订阅信息更新
             updatedData[field] = typeof value === 'string' ? value : JSON.stringify(value)

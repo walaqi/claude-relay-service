@@ -1,4 +1,5 @@
 const logger = require('./logger')
+const { normalizeTempUnavailablePolicyFromAccountData } = require('./tempUnavailablePolicy')
 
 const TEMP_UNAVAILABLE_PREFIX = 'temp_unavailable'
 const ERROR_HISTORY_PREFIX = 'error_history'
@@ -55,6 +56,87 @@ const getRedis = () => {
     _redis = require('../models/redis')
   }
   return _redis
+}
+
+// 可读取账号级临时暂停配置的 Redis key 前缀映射
+const ACCOUNT_KEY_PREFIX_BY_TYPE = {
+  'claude-official': 'claude:account:',
+  claude: 'claude:account:'
+}
+
+const EMPTY_TEMP_UNAVAILABLE_POLICY = {
+  disableTempUnavailable: false,
+  ttl503Seconds: null,
+  ttl5xxSeconds: null
+}
+
+const getAccountTempUnavailablePolicy = async (accountId, accountType) => {
+  try {
+    const accountPrefix = ACCOUNT_KEY_PREFIX_BY_TYPE[accountType]
+    if (!accountPrefix) {
+      return EMPTY_TEMP_UNAVAILABLE_POLICY
+    }
+
+    const redis = getRedis()
+    const client = redis.getClientSafe()
+    const accountData = await client.hgetall(`${accountPrefix}${accountId}`)
+    if (!accountData || Object.keys(accountData).length === 0) {
+      return EMPTY_TEMP_UNAVAILABLE_POLICY
+    }
+
+    return normalizeTempUnavailablePolicyFromAccountData(accountData)
+  } catch (error) {
+    logger.warn(
+      `⚠️ [UpstreamError] Failed to load account temp-unavailable policy for ${accountType}:${accountId}: ${error.message}`
+    )
+    return EMPTY_TEMP_UNAVAILABLE_POLICY
+  }
+}
+
+const resolveAccountTtlOverride = ({ policy, statusCode, errorType }) => {
+  if (!policy) {
+    return { skip: false, ttlOverrideSeconds: null, reason: '' }
+  }
+
+  if (policy.disableTempUnavailable) {
+    return {
+      skip: true,
+      ttlOverrideSeconds: null,
+      reason: 'account_temp_unavailable_disabled'
+    }
+  }
+
+  if (statusCode === 503 && policy.ttl503Seconds !== null) {
+    if (policy.ttl503Seconds <= 0) {
+      return {
+        skip: true,
+        ttlOverrideSeconds: null,
+        reason: 'account_503_ttl_disabled'
+      }
+    }
+    return {
+      skip: false,
+      ttlOverrideSeconds: policy.ttl503Seconds,
+      reason: 'account_503_ttl_override'
+    }
+  }
+
+  if (errorType === 'server_error' && policy.ttl5xxSeconds !== null) {
+    if (policy.ttl5xxSeconds <= 0) {
+      return {
+        skip: true,
+        ttlOverrideSeconds: null,
+        reason: 'account_5xx_ttl_disabled'
+      }
+    }
+    return {
+      skip: false,
+      ttlOverrideSeconds: policy.ttl5xxSeconds,
+      reason: 'account_5xx_ttl_override'
+    }
+  }
+
+  return { skip: false, ttlOverrideSeconds: null, reason: '' }
 }
 
 // 根据 HTTP 状态码分类错误类型
@@ -216,18 +298,41 @@ const markTempUnavailable = async (
       return { success: false, reason: 'not_a_pausable_error' }
     }
 
+    const policy = await getAccountTempUnavailablePolicy(accountId, accountType)
+    const policyDecision = resolveAccountTtlOverride({
+      policy,
+      statusCode,
+      errorType
+    })
+
+    const key = `${TEMP_UNAVAILABLE_PREFIX}:${accountType}:${accountId}`
+    if (policyDecision.skip) {
+      const redis = getRedis()
+      const client = redis.getClientSafe()
+      await client.del(key).catch(() => {})
+      logger.info(
+        `⏭️ [UpstreamError] Skip temp-unavailable for account ${accountId} (${accountType}), reason: ${policyDecision.reason}`
+      )
+      return { success: true, skipped: true, reason: policyDecision.reason }
+    }
+
     const ttlConfig = getTtlConfig()
     const parsedCustomTtl = Number(customTtl)
-    const ttlSeconds =
+    let ttlSeconds =
       Number.isFinite(parsedCustomTtl) && parsedCustomTtl > 0
         ? Math.ceil(parsedCustomTtl)
         : ttlConfig[errorType]
+    if (
+      Number.isFinite(policyDecision.ttlOverrideSeconds) &&
+      policyDecision.ttlOverrideSeconds > 0
+    ) {
+      ttlSeconds = policyDecision.ttlOverrideSeconds
+    }
     const markedAtIso = new Date().toISOString()
     const expiresAtIso = new Date(Date.now() + ttlSeconds * 1000).toISOString()
 
     const redis = getRedis()
     const client = redis.getClientSafe()
-    const key = `${TEMP_UNAVAILABLE_PREFIX}:${accountType}:${accountId}`
     await client.setex(
       key,
       ttlSeconds,

@@ -2301,6 +2301,7 @@ const handleCancel = () => {
 const accounts = ref([])
 const accountsLoading = ref(false)
 const refreshingBalances = ref(false)
+const tempUnavailableNowTs = ref(Date.now())
 const accountsSortBy = ref('name')
 const accountsSortOrder = ref('asc')
 const apiKeys = ref([]) // 保留用于其他功能（如删除账户时显示绑定信息）
@@ -3792,7 +3793,29 @@ const toPositiveInteger = (value) => {
 
 const getTempUnavailableRemainingSeconds = (tempUnavailable) => {
   if (!tempUnavailable) return 0
-  return toPositiveInteger(tempUnavailable.remainingSeconds || tempUnavailable.ttl)
+  const serverRemainingSeconds = toPositiveInteger(
+    tempUnavailable.remainingSeconds || tempUnavailable.ttl
+  )
+
+  const recoveryAt = getTempUnavailableRecoveryAt(tempUnavailable)
+  if (!recoveryAt) {
+    return serverRemainingSeconds
+  }
+
+  const recoveryAtTimestamp = new Date(recoveryAt).getTime()
+  if (Number.isNaN(recoveryAtTimestamp)) {
+    return serverRemainingSeconds
+  }
+
+  const liveRemainingSeconds = Math.max(
+    0,
+    Math.ceil((recoveryAtTimestamp - tempUnavailableNowTs.value) / 1000)
+  )
+
+  if (serverRemainingSeconds <= 0) {
+    return liveRemainingSeconds
+  }
+  return Math.min(serverRemainingSeconds, liveRemainingSeconds)
 }
 
 const getTempUnavailableCooldownSeconds = (tempUnavailable) => {
@@ -5212,10 +5235,16 @@ const checkHorizontalScroll = () => {
 
 // 窗口大小变化时重新检测
 let resizeObserver = null
+let tempUnavailableCountdownTimer = null
 
 onMounted(() => {
   // 首次加载时强制刷新所有数据
   loadAccounts(true)
+
+  // 让临时不可用剩余时间在页面停留时也可见地递减
+  tempUnavailableCountdownTimer = setInterval(() => {
+    tempUnavailableNowTs.value = Date.now()
+  }, 1000)
 
   // 设置ResizeObserver监听表格容器大小变化
   nextTick(() => {
@@ -5235,6 +5264,10 @@ onMounted(() => {
 onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
+  }
+  if (tempUnavailableCountdownTimer) {
+    clearInterval(tempUnavailableCountdownTimer)
+    tempUnavailableCountdownTimer = null
   }
   window.removeEventListener('resize', checkHorizontalScroll)
 })
