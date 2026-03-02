@@ -22,10 +22,7 @@ jest.mock('../src/utils/testPayloadHelper', () => ({
 
 const claudeConsoleRelayService = require('../src/services/relay/claudeConsoleRelayService')
 const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
-const {
-  createClaudeTestPayload,
-  sendStreamTestRequest
-} = require('../src/utils/testPayloadHelper')
+const { createClaudeTestPayload, sendStreamTestRequest } = require('../src/utils/testPayloadHelper')
 
 describe('claudeConsoleRelayService.testAccountConnection', () => {
   beforeEach(() => {
