@@ -197,13 +197,14 @@ async function handleMessagesRequest(req, res) {
       }
     }
 
-    // 拦截 1M 上下文窗口请求（anthropic-beta 包含 context-1m）
+    // 检测 1M 上下文窗口请求（anthropic-beta 包含 context-1m）
     const betaHeader = (req.headers['anthropic-beta'] || '').toLowerCase()
-    if (betaHeader.includes('context-1m')) {
+    const is1mContextRequest = betaHeader.includes('context-1m')
+    if (is1mContextRequest && !req.apiKey.allow1mContext) {
       return res.status(403).json({
         error: {
           type: 'forbidden',
-          message: '暂不支持 1M 上下文窗口，请切换为非 [1m] 模型'
+          message: '该 API Key 未启用 1M 上下文窗口，请联系管理员开启或切换为非 [1m] 模型'
         }
       })
     }
@@ -386,6 +387,16 @@ async function handleMessagesRequest(req, res) {
           return
         }
         throw error
+      }
+
+      // 1M 上下文窗口：检查调度到的账户类型是否支持
+      if (is1mContextRequest && accountType !== 'bedrock') {
+        return res.status(403).json({
+          error: {
+            type: 'forbidden',
+            message: `1M 上下文窗口仅支持 Bedrock 账户类型，当前调度到 ${accountType}，请绑定 Bedrock 账户`
+          }
+        })
       }
 
       // 🔗 在成功调度后建立会话绑定（仅 claude-official 类型）
