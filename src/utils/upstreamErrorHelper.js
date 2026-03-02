@@ -8,6 +8,7 @@ const ERROR_HISTORY_TTL = 3 * 24 * 60 * 60 // 3天
 // 默认 TTL（秒）
 const DEFAULT_TTL = {
   server_error: 300, // 5xx: 5分钟
+  service_unavailable: 60, // 503: 1分钟（默认更短，避免短暂抖动导致长时间不可路由）
   overload: 600, // 529: 10分钟
   auth_error: 1800, // 401/403: 30分钟
   timeout: 300, // 504/网络超时: 5分钟
@@ -29,7 +30,16 @@ const getConfig = () => {
 
 const getTtlConfig = () => {
   const config = getConfig()
+  const parseEnvPositiveInt = (name) => {
+    const value = parseInt(process.env[name], 10)
+    return Number.isFinite(value) && value > 0 ? value : null
+  }
+
   return {
+    service_unavailable:
+      config.upstreamError?.serviceUnavailableTtlSeconds ??
+      parseEnvPositiveInt('UPSTREAM_ERROR_503_TTL_SECONDS') ??
+      DEFAULT_TTL.service_unavailable,
     server_error: config.upstreamError?.serverErrorTtlSeconds ?? DEFAULT_TTL.server_error,
     overload: config.upstreamError?.overloadTtlSeconds ?? DEFAULT_TTL.overload,
     auth_error: config.upstreamError?.authErrorTtlSeconds ?? DEFAULT_TTL.auth_error,
@@ -51,6 +61,9 @@ const getRedis = () => {
 const classifyError = (statusCode) => {
   if (statusCode === 529) {
     return 'overload'
+  }
+  if (statusCode === 503) {
+    return 'service_unavailable'
   }
   if (statusCode === 504) {
     return 'timeout'
@@ -204,7 +217,13 @@ const markTempUnavailable = async (
     }
 
     const ttlConfig = getTtlConfig()
-    const ttlSeconds = customTtl ?? ttlConfig[errorType]
+    const parsedCustomTtl = Number(customTtl)
+    const ttlSeconds =
+      Number.isFinite(parsedCustomTtl) && parsedCustomTtl > 0
+        ? Math.ceil(parsedCustomTtl)
+        : ttlConfig[errorType]
+    const markedAtIso = new Date().toISOString()
+    const expiresAtIso = new Date(Date.now() + ttlSeconds * 1000).toISOString()
 
     const redis = getRedis()
     const client = redis.getClientSafe()
@@ -215,18 +234,21 @@ const markTempUnavailable = async (
       JSON.stringify({
         statusCode,
         errorType,
-        markedAt: new Date().toISOString()
+        markedAt: markedAtIso,
+        ttlSeconds,
+        cooldownSeconds: ttlSeconds,
+        expiresAt: expiresAtIso
       })
     )
 
     logger.warn(
-      `⏱️ [UpstreamError] Account ${accountId} (${accountType}) marked temporarily unavailable for ${ttlSeconds}s (${statusCode} ${errorType})`
+      `⏱️ [UpstreamError] Account ${accountId} (${accountType}) marked temporarily unavailable for ${ttlSeconds}s (${statusCode} ${errorType}), recovers at ${expiresAtIso}`
     )
 
     // 异步记录错误历史，不阻塞主流程
     recordErrorHistory(accountId, accountType, statusCode, errorType, context).catch(() => {})
 
-    return { success: true, ttlSeconds, errorType }
+    return { success: true, ttlSeconds, errorType, expiresAt: expiresAtIso }
   } catch (error) {
     logger.error(
       `❌ [UpstreamError] Failed to mark account ${accountId} temporarily unavailable:`,
@@ -242,7 +264,22 @@ const isTempUnavailable = async (accountId, accountType) => {
     const redis = getRedis()
     const client = redis.getClientSafe()
     const key = `${TEMP_UNAVAILABLE_PREFIX}:${accountType}:${accountId}`
-    return (await client.exists(key)) === 1
+    const ttl = await client.ttl(key)
+
+    if (ttl === -2) {
+      return false
+    }
+
+    if (ttl === -1) {
+      // 理论上该 key 必须带 TTL；如果无 TTL，自动清理以避免“永久不可用”
+      logger.warn(
+        `⚠️ [UpstreamError] Found temp_unavailable key without TTL for account ${accountId} (${accountType}), auto-clearing`
+      )
+      await client.del(key)
+      return false
+    }
+
+    return ttl > 0
   } catch (error) {
     logger.error(
       `❌ [UpstreamError] Failed to check temp unavailable status for ${accountId}:`,
@@ -281,6 +318,7 @@ const getAllTempUnavailable = async () => {
       pipeline.ttl(key)
     }
     const results = await pipeline.exec()
+    const cleanupPipeline = client.pipeline()
 
     const statuses = {}
     for (let i = 0; i < keys.length; i++) {
@@ -295,21 +333,40 @@ const getAllTempUnavailable = async () => {
         continue
       }
 
+      if (ttl === -1) {
+        // 自愈：清理无 TTL 的异常键，避免账户被永久阻塞
+        cleanupPipeline.del(key)
+        continue
+      }
+
       try {
         const data = JSON.parse(value)
         const compositeKey = `${accountType}:${accountId}`
+        const cooldownSecondsRaw = Number(data.cooldownSeconds)
+        const ttlSecondsRaw = Number(data.ttlSeconds)
+        const configuredCooldownSeconds = Number.isFinite(cooldownSecondsRaw)
+          ? Math.max(0, Math.floor(cooldownSecondsRaw))
+          : Number.isFinite(ttlSecondsRaw)
+            ? Math.max(0, Math.floor(ttlSecondsRaw))
+            : null
+
         statuses[compositeKey] = {
           accountId,
           accountType,
           statusCode: data.statusCode,
           errorType: data.errorType,
           markedAt: data.markedAt,
-          ttl: ttl > 0 ? ttl : 0
+          ttl: ttl > 0 ? ttl : 0,
+          remainingSeconds: ttl > 0 ? ttl : 0,
+          cooldownSeconds: configuredCooldownSeconds,
+          expiresAt: data.expiresAt || null
         }
       } catch {
         // ignore parse errors
       }
     }
+
+    await cleanupPipeline.exec().catch(() => {})
     return statuses
   } catch (error) {
     logger.error('❌ [UpstreamError] Failed to get all temp unavailable statuses:', error)

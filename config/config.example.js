@@ -232,6 +232,8 @@ const config = {
 
   // ⏱️ 上游错误自动暂停配置
   upstreamError: {
+    serviceUnavailableTtlSeconds:
+      parseInt(process.env.UPSTREAM_ERROR_503_TTL_SECONDS) || 60, // 503错误暂停秒数
     serverErrorTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_5XX_TTL_SECONDS) || 300, // 5xx错误暂停秒数
     overloadTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_OVERLOAD_TTL_SECONDS) || 600, // 529过载暂停秒数
     authErrorTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_AUTH_TTL_SECONDS) || 1800, // 401/403认证错误暂停秒数

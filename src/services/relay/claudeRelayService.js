@@ -2886,13 +2886,14 @@ class ClaudeRelayService {
         `⏱️ ${prefix}${isTimeout ? 'Timeout' : 'Server'} error for account ${accountId}, error count: ${errorCount}/${threshold}`
       )
 
-      // 标记账户为临时不可用（5分钟）
+      // 标记账户为临时不可用（TTL 由 upstreamError 配置决定）
       try {
         await unifiedClaudeScheduler.markAccountTemporarilyUnavailable(
           accountId,
           accountType,
           sessionHash,
-          300
+          null,
+          statusCode
         )
       } catch (markError) {
         logger.error(`❌ Failed to mark account temporarily unavailable: ${accountId}`, markError)
