@@ -523,11 +523,13 @@ class ClaudeAccountService {
       // 处理返回数据，移除敏感信息并添加限流状态和会话窗口信息
       const processedAccounts = await Promise.all(
         accounts.map(async (account) => {
-          // 获取限流状态信息
-          const rateLimitInfo = await this.getAccountRateLimitInfo(account.id)
-
-          // 获取会话窗口信息
-          const sessionWindowInfo = await this.getSessionWindowInfo(account.id)
+          const [rateLimitInfo, sessionWindowInfo, opusRateLimitStatus, isOverloaded] =
+            await Promise.all([
+              this.getAccountRateLimitInfo(account.id),
+              this.getSessionWindowInfo(account.id),
+              this.getAccountOpusRateLimitInfo(account.id, account),
+              this.isAccountOverloaded(account.id)
+            ])
 
           // 构建 Claude Usage 快照（从 Redis 读取）
           const claudeUsage = this.buildClaudeUsageSnapshot(account)
@@ -537,6 +539,12 @@ class ClaudeAccountService {
           const isOAuth = scopes.includes('user:profile') && scopes.includes('user:inference')
           const authType = isOAuth ? 'oauth' : 'setup-token'
           const parsedExtInfo = this._safeParseJson(account.extInfo)
+          const parsedProxy = this._safeParseAccountFieldJson(account.proxy, 'proxy', account.id)
+          const parsedSubscriptionInfo = this._safeParseAccountFieldJson(
+            account.subscriptionInfo,
+            'subscriptionInfo',
+            account.id
+          )
 
           return {
             id: account.id,
@@ -544,7 +552,7 @@ class ClaudeAccountService {
             description: account.description,
             email: account.email ? this._maskEmail(this._decryptSensitiveData(account.email)) : '',
             isActive: account.isActive === 'true',
-            proxy: account.proxy ? JSON.parse(account.proxy) : null,
+            proxy: parsedProxy,
             status: account.status,
             errorMessage: account.errorMessage,
             accountType: account.accountType || 'shared', // 兼容旧数据，默认为共享
@@ -565,9 +573,7 @@ class ClaudeAccountService {
             // 添加 refreshToken 是否存在的标记（不返回实际值）
             hasRefreshToken: !!account.refreshToken,
             // 添加套餐信息（如果存在）
-            subscriptionInfo: account.subscriptionInfo
-              ? JSON.parse(account.subscriptionInfo)
-              : null,
+            subscriptionInfo: parsedSubscriptionInfo,
             // 添加限流状态信息
             rateLimitStatus: rateLimitInfo
               ? {
@@ -576,6 +582,13 @@ class ClaudeAccountService {
                   minutesRemaining: rateLimitInfo.minutesRemaining
                 }
               : null,
+            // Opus 专属限流状态（仅影响 Opus 模型路由）
+            opusRateLimitStatus,
+            // 过载状态（429/529 自动保护）
+            overloadStatus: {
+              isOverloaded,
+              lastOverloadAt: account.lastOverloadAt || null
+            },
             // 添加会话窗口信息
             sessionWindow: sessionWindowInfo || {
               hasActiveWindow: false,
@@ -1496,6 +1509,58 @@ class ClaudeAccountService {
     } catch (error) {
       logger.error(`❌ Failed to clear Opus rate limit for account: ${accountId}`, error)
       throw error
+    }
+  }
+
+  // 📊 获取账号 Opus 限流信息（自动清理过期状态）
+  async getAccountOpusRateLimitInfo(accountId, accountData = null) {
+    try {
+      const data = accountData || (await redis.getClaudeAccount(accountId))
+      if (!data || Object.keys(data).length === 0 || !data.opusRateLimitEndAt) {
+        return {
+          isRateLimited: false,
+          rateLimitedAt: null,
+          resetAt: null,
+          minutesRemaining: 0
+        }
+      }
+
+      const resetAtMs = Date.parse(data.opusRateLimitEndAt)
+      if (Number.isNaN(resetAtMs)) {
+        return {
+          isRateLimited: false,
+          rateLimitedAt: data.opusRateLimitedAt || null,
+          resetAt: null,
+          minutesRemaining: 0
+        }
+      }
+
+      const nowMs = Date.now()
+      if (nowMs >= resetAtMs) {
+        // 自动清理过期标记，避免前端持续显示陈旧状态
+        await this.clearAccountOpusRateLimit(accountId).catch(() => {})
+        return {
+          isRateLimited: false,
+          rateLimitedAt: data.opusRateLimitedAt || null,
+          resetAt: data.opusRateLimitEndAt,
+          minutesRemaining: 0
+        }
+      }
+
+      return {
+        isRateLimited: true,
+        rateLimitedAt: data.opusRateLimitedAt || null,
+        resetAt: data.opusRateLimitEndAt,
+        minutesRemaining: Math.max(0, Math.ceil((resetAtMs - nowMs) / (1000 * 60)))
+      }
+    } catch (error) {
+      logger.error(`❌ Failed to get Opus rate limit info for account: ${accountId}`, error)
+      return {
+        isRateLimited: false,
+        rateLimitedAt: null,
+        resetAt: null,
+        minutesRemaining: 0
+      }
     }
   }
 
@@ -2507,6 +2572,9 @@ class ClaudeAccountService {
       delete updatedAccountData.tempErrorAt
       delete updatedAccountData.sessionWindowStart
       delete updatedAccountData.sessionWindowEnd
+      delete updatedAccountData.opusRateLimitedAt
+      delete updatedAccountData.opusRateLimitEndAt
+      delete updatedAccountData.lastOverloadAt
 
       // 保存更新后的账户数据
       await redis.setClaudeAccount(accountId, updatedAccountData)
@@ -2522,6 +2590,9 @@ class ClaudeAccountService {
         'tempErrorAt',
         'sessionWindowStart',
         'sessionWindowEnd',
+        'opusRateLimitedAt',
+        'opusRateLimitEndAt',
+        'lastOverloadAt',
         // 新的独立标记
         'rateLimitAutoStopped',
         'fiveHourAutoStopped',
@@ -2553,7 +2624,10 @@ class ClaudeAccountService {
       await redis.client.del(overloadKey)
 
       // 清除临时不可用状态
-      await upstreamErrorHelper.clearTempUnavailable(accountId, 'claude-official').catch(() => {})
+      await Promise.all([
+        upstreamErrorHelper.clearTempUnavailable(accountId, 'claude-official').catch(() => {}),
+        upstreamErrorHelper.clearTempUnavailable(accountId, 'claude').catch(() => {})
+      ])
 
       logger.info(
         `✅ Successfully reset all error states for account ${accountData.name} (${accountId})`
@@ -3278,6 +3352,28 @@ class ClaudeAccountService {
       return parsed && typeof parsed === 'object' ? parsed : null
     } catch (error) {
       logger.warn('⚠️ 解析扩展信息失败，已忽略：', error.message)
+      return null
+    }
+  }
+
+  _safeParseAccountFieldJson(value, fieldName, accountId = '') {
+    if (!value) {
+      return null
+    }
+    if (typeof value === 'object') {
+      return value
+    }
+    if (typeof value !== 'string') {
+      return null
+    }
+
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch (error) {
+      logger.warn(
+        `⚠️ Failed to parse ${fieldName} for Claude account ${accountId || 'unknown'}, ignored: ${error.message}`
+      )
       return null
     }
   }
