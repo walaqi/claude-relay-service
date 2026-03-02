@@ -1494,11 +1494,16 @@ class ClaudeRelayService {
     const contentLength = Buffer.byteLength(bodyString, 'utf8')
 
     // 构建最终请求头（包含认证、版本、User-Agent、Beta 等）
+    // Force identity encoding to prevent upstream (Cloudflare) from returning
+    // gzip-compressed responses without a Content-Encoding header, which causes
+    // binary data to be silently corrupted by UTF-8 text decoding in the stream
+    // handler. See: https://github.com/Wei-Shaw/claude-relay-service/issues/1030
     const headers = {
       host: 'api.anthropic.com',
       connection: 'keep-alive',
       'content-type': 'application/json',
       'content-length': String(contentLength),
+      'accept-encoding': 'identity',
       authorization: `Bearer ${accessToken}`,
       'anthropic-version': this.apiVersion,
       ...finalHeaders
