@@ -389,14 +389,11 @@ async function handleMessagesRequest(req, res) {
         throw error
       }
 
-      // 1M 上下文窗口：检查调度到的账户类型是否支持
-      if (is1mContextRequest && accountType !== 'bedrock') {
-        return res.status(403).json({
-          error: {
-            type: 'forbidden',
-            message: `1M 上下文窗口仅支持 Bedrock 账户类型，当前调度到 ${accountType}，请绑定 Bedrock 账户`
-          }
-        })
+      // 1M 上下文窗口：记录日志（admin 已通过 allow1mContext 授权，信任其决定）
+      if (is1mContextRequest) {
+        logger.api(
+          `📐 1M context request allowed for key: ${req.apiKey.name}, accountType: ${accountType}`
+        )
       }
 
       // 🔗 在成功调度后建立会话绑定（仅 claude-official 类型）
