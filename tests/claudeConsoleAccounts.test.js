@@ -6,9 +6,9 @@ jest.mock('../src/middleware/auth', () => ({
 }))
 
 jest.mock('../src/services/relay/claudeConsoleRelayService', () => ({
-  testAccountConnection: jest.fn(async (accountId, res) => {
-    return res.status(200).json({ success: true, accountId })
-  })
+  testAccountConnection: jest.fn(async (accountId, res) =>
+    res.status(200).json({ success: true, accountId })
+  )
 }))
 
 jest.mock('../src/services/account/claudeConsoleAccountService', () => ({}))
