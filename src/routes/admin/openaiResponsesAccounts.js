@@ -481,7 +481,7 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
     }
     // 防止 baseApi 已含 /v1 时路径重复
     if (!baseUrl.endsWith('/v1')) {
-      endpointPath = '/v1' + endpointPath
+      endpointPath = `/v1${endpointPath}`
     }
     const apiUrl = `${baseUrl}${endpointPath}`
     const payload = createOpenAITestPayload(model, { stream: false })
