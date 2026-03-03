@@ -1526,6 +1526,10 @@ class ClaudeRelayService {
       ...finalHeaders
     }
 
+    // 强制 identity 编码：finalHeaders 可能携带客户端或 Redis 缓存中的 accept-encoding（如 zstd），
+    // 必须在 spread 后覆盖回 identity，因为 https.request 的手动解压只支持 gzip/deflate
+    headers['accept-encoding'] = 'identity'
+
     // 使用统一 User-Agent 或客户端提供的，最后使用默认值
     const userAgent = unifiedUA || headers['user-agent'] || 'claude-cli/1.0.119 (external, cli)'
     const acceptHeader = headers['accept'] || 'application/json'
