@@ -1230,6 +1230,7 @@ class ApiKeyService {
         'restrictedModels',
         'enableClientRestriction',
         'allowedClients',
+        'allow1mContext',
         'dailyCostLimit',
         'totalCostLimit',
         'weeklyOpusCostLimit',
