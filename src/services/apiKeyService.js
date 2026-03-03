@@ -453,6 +453,7 @@ class ApiKeyService {
           restrictedModels,
           enableClientRestriction: keyData.enableClientRestriction === 'true',
           allowedClients,
+          allow1mContext: keyData.allow1mContext === 'true',
           dailyCostLimit,
           totalCostLimit,
           weeklyOpusCostLimit,
