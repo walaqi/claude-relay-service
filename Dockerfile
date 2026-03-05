@@ -73,11 +73,11 @@ RUN if [ ! -f "/app/config/config.js" ] && [ -f "/app/config/config.example.js" 
     fi
 
 # 🌐 暴露端口
-EXPOSE 3001
+EXPOSE 3000
 
 # 🏥 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3001/health || exit 1
+    CMD curl -f http://localhost:3000/health || exit 1
 
 # 🚀 启动应用
 ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/docker-entrypoint.sh"]

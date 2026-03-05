@@ -11,14 +11,14 @@ services:
     restart: unless-stopped
     ports:
       # 绑定地址：生产环境建议使用反向代理，设置 BIND_HOST=127.0.0.1
-      - "${BIND_HOST:-0.0.0.0}:${PORT:-3001}:3001"
+      - "${BIND_HOST:-0.0.0.0}:${PORT:-3000}:3000"
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
     environment:
       # 🌐 服务器配置
       - NODE_ENV=production
-      - PORT=3001
+      - PORT=3000
       - HOST=0.0.0.0
       
       # 🔧 请求体大小配置
@@ -82,7 +82,7 @@ services:
     networks:
       - claude-relay-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
