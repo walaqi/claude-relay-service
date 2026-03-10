@@ -132,16 +132,23 @@ class ClaudeRelayService {
     return ''
   }
 
-  // 🚫 检查是否为组织被禁用错误
+  // 🚫 检查是否为组织被禁用/封禁错误
+  // 支持两种场景：
+  //   1. HTTP 400 + "this organization has been disabled"（原有）
+  //   2. HTTP 403 + "OAuth authentication is currently not allowed for this organization"（封禁后新返回格式）
   _isOrganizationDisabledError(statusCode, body) {
-    if (statusCode !== 400) {
+    if (statusCode !== 400 && statusCode !== 403) {
       return false
     }
     const message = this._extractErrorMessage(body)
     if (!message) {
       return false
     }
-    return message.toLowerCase().includes('this organization has been disabled')
+    const lowerMessage = message.toLowerCase()
+    return (
+      lowerMessage.includes('this organization has been disabled') ||
+      lowerMessage.includes('oauth authentication is currently not allowed')
+    )
   }
 
   // 🔍 判断是否是真实的 Claude Code 请求
@@ -181,6 +188,16 @@ class ClaudeRelayService {
       lower.includes('only authorized for use with claude code') ||
       lower.includes('cannot be used for other api requests')
     )
+  }
+
+  // 💰 检查是否为 "Extra usage required" 的非限流 429
+  // Anthropic 对未开启 Extra Usage 的账户请求长上下文模型时返回此错误
+  // 这不是真正的限流，不应标记账户为 rate limited
+  _isExtraUsageRequired429(statusCode, body) {
+    if (statusCode !== 429) return false
+    const message = this._extractErrorMessage(body)
+    if (!message) return false
+    return message.toLowerCase().includes('extra usage')
   }
 
   _toPascalCaseToolName(name) {
@@ -703,7 +720,15 @@ class ClaudeRelayService {
             await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
           }
         }
-        // 检查是否为403状态码（禁止访问）
+        // 检查是否为组织被禁用/封禁错误（400 或 403）
+        // 必须在通用 403 处理之前检测，否则会被截断
+        else if (organizationDisabledError) {
+          logger.error(
+            `🚫 Organization disabled/banned error (${response.statusCode}) detected for account ${accountId}, marking as blocked`
+          )
+          await unifiedClaudeScheduler.markAccountBlocked(accountId, accountType, sessionHash)
+        }
+        // 检查是否为403状态码（禁止访问，非封禁类）
         // 注意：如果进行了重试，retryCount > 0；这里的 403 是重试后最终的结果
         else if (response.statusCode === 403) {
           logger.error(
@@ -714,13 +739,6 @@ class ClaudeRelayService {
           if (sessionHash) {
             await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
           }
-        }
-        // 检查是否返回组织被禁用错误（400状态码）
-        else if (organizationDisabledError) {
-          logger.error(
-            `🚫 Organization disabled error (400) detected for account ${accountId}, marking as blocked`
-          )
-          await unifiedClaudeScheduler.markAccountBlocked(accountId, accountType, sessionHash)
         }
         // 检查是否为529状态码（服务过载）
         else if (response.statusCode === 529) {
@@ -748,41 +766,48 @@ class ClaudeRelayService {
         }
         // 检查是否为429状态码
         else if (response.statusCode === 429) {
-          const resetHeader = response.headers
-            ? response.headers['anthropic-ratelimit-unified-reset']
-            : null
-          const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
-
-          if (isOpusModelRequest && !Number.isNaN(parsedResetTimestamp)) {
-            await claudeAccountService.markAccountOpusRateLimited(accountId, parsedResetTimestamp)
-            logger.warn(
-              `🚫 Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
+          // 💰 先检查是否为 "Extra usage required" 的非限流 429
+          if (this._isExtraUsageRequired429(response.statusCode, response.body)) {
+            logger.info(
+              `💰 [Non-Stream] "Extra usage required" 429 for account ${accountId}, skipping rate limit marking`
             )
-
-            if (isDedicatedOfficialAccount) {
-              const limitMessage = this._buildOpusLimitMessage(parsedResetTimestamp)
-              return {
-                statusCode: 403,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  error: 'opus_weekly_limit',
-                  message: limitMessage
-                }),
-                accountId
-              }
-            }
           } else {
-            isRateLimited = true
-            if (!Number.isNaN(parsedResetTimestamp)) {
-              rateLimitResetTimestamp = parsedResetTimestamp
-              logger.info(
-                `🕐 Extracted rate limit reset timestamp: ${rateLimitResetTimestamp} (${new Date(rateLimitResetTimestamp * 1000).toISOString()})`
+            const resetHeader = response.headers
+              ? response.headers['anthropic-ratelimit-unified-reset']
+              : null
+            const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
+
+            if (isOpusModelRequest && !Number.isNaN(parsedResetTimestamp)) {
+              await claudeAccountService.markAccountOpusRateLimited(accountId, parsedResetTimestamp)
+              logger.warn(
+                `🚫 Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
               )
-            }
-            if (isDedicatedOfficialAccount) {
-              dedicatedRateLimitMessage = this._buildStandardRateLimitMessage(
-                rateLimitResetTimestamp || account?.rateLimitEndAt
-              )
+
+              if (isDedicatedOfficialAccount) {
+                const limitMessage = this._buildOpusLimitMessage(parsedResetTimestamp)
+                return {
+                  statusCode: 403,
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    error: 'opus_weekly_limit',
+                    message: limitMessage
+                  }),
+                  accountId
+                }
+              }
+            } else {
+              isRateLimited = true
+              if (!Number.isNaN(parsedResetTimestamp)) {
+                rateLimitResetTimestamp = parsedResetTimestamp
+                logger.info(
+                  `🕐 Extracted rate limit reset timestamp: ${rateLimitResetTimestamp} (${new Date(rateLimitResetTimestamp * 1000).toISOString()})`
+                )
+              }
+              if (isDedicatedOfficialAccount) {
+                dedicatedRateLimitMessage = this._buildStandardRateLimitMessage(
+                  rateLimitResetTimestamp || account?.rateLimitEndAt
+                )
+              }
             }
           }
         } else {
@@ -1486,15 +1511,24 @@ class ClaudeRelayService {
     const contentLength = Buffer.byteLength(bodyString, 'utf8')
 
     // 构建最终请求头（包含认证、版本、User-Agent、Beta 等）
+    // Force identity encoding to prevent upstream (Cloudflare) from returning
+    // gzip-compressed responses without a Content-Encoding header, which causes
+    // binary data to be silently corrupted by UTF-8 text decoding in the stream
+    // handler. See: https://github.com/Wei-Shaw/claude-relay-service/issues/1030
     const headers = {
       host: 'api.anthropic.com',
       connection: 'keep-alive',
       'content-type': 'application/json',
       'content-length': String(contentLength),
+      'accept-encoding': 'identity',
       authorization: `Bearer ${accessToken}`,
       'anthropic-version': this.apiVersion,
       ...finalHeaders
     }
+
+    // 强制 identity 编码：finalHeaders 可能携带客户端或 Redis 缓存中的 accept-encoding（如 zstd），
+    // 必须在 spread 后覆盖回 identity，因为 https.request 的手动解压只支持 gzip/deflate
+    headers['accept-encoding'] = 'identity'
 
     // 使用统一 User-Agent 或客户端提供的，最后使用默认值
     const userAgent = unifiedUA || headers['user-agent'] || 'claude-cli/1.0.119 (external, cli)'
@@ -2027,6 +2061,61 @@ class ClaudeRelayService {
         // 错误响应处理
         if (res.statusCode !== 200) {
           if (res.statusCode === 429) {
+            // 💰 先读取完整 body 以区分 "Extra usage required" 和真正的限流
+            const bodyChunks429 = []
+            await new Promise((resolveBody) => {
+              res.on('data', (chunk) => bodyChunks429.push(chunk))
+              res.on('end', resolveBody)
+              res.on('error', resolveBody)
+            })
+            const errorBody429 = Buffer.concat(bodyChunks429).toString()
+
+            // 检查是否为 "Extra usage required" 的非限流 429
+            if (this._isExtraUsageRequired429(res.statusCode, errorBody429)) {
+              logger.info(
+                `💰 [Stream] "Extra usage required" 429 for account ${accountId}, skipping rate limit marking`
+              )
+              logger.error(
+                `❌ Claude API returned error status: 429 | Account: ${account?.name || accountId}`
+              )
+              logger.error(
+                `❌ Claude API error response (Account: ${account?.name || accountId}):`,
+                errorBody429
+              )
+              if (isStreamWritable(responseStream)) {
+                let errorMessage = `Claude API error: 429`
+                try {
+                  const parsedError = JSON.parse(errorBody429)
+                  if (parsedError.error?.message) {
+                    errorMessage = parsedError.error.message
+                  } else if (parsedError.message) {
+                    errorMessage = parsedError.message
+                  }
+                } catch {
+                  // 使用默认错误消息
+                }
+                if (toolNameStreamTransformer) {
+                  responseStream.write(
+                    `data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`
+                  )
+                } else {
+                  responseStream.write('event: error\n')
+                  responseStream.write(
+                    `data: ${JSON.stringify({
+                      error: 'Claude API error',
+                      status: 429,
+                      details: errorBody429,
+                      timestamp: new Date().toISOString()
+                    })}\n\n`
+                  )
+                }
+                responseStream.end()
+              }
+              reject(new Error(`Claude API error: 429`))
+              return
+            }
+
+            // 真正的限流处理
             const resetHeader = res.headers
               ? res.headers['anthropic-ratelimit-unified-reset']
               : null
@@ -2056,7 +2145,6 @@ class ClaudeRelayService {
                   })
                 )
                 responseStream.end()
-                res.resume()
                 resolve()
                 return
               }
@@ -2095,11 +2183,50 @@ class ClaudeRelayService {
                   })
                 )
                 responseStream.end()
-                res.resume()
                 resolve()
                 return
               }
             }
+
+            // 非专属账户的真正限流：透传错误给客户端（body 已读完，无需 fall-through）
+            logger.error(
+              `❌ Claude API returned error status: 429 | Account: ${account?.name || accountId}`
+            )
+            logger.error(
+              `❌ Claude API error response (Account: ${account?.name || accountId}):`,
+              errorBody429
+            )
+            if (isStreamWritable(responseStream)) {
+              let errorMessage = `Claude API error: 429`
+              try {
+                const parsedError = JSON.parse(errorBody429)
+                if (parsedError.error?.message) {
+                  errorMessage = parsedError.error.message
+                } else if (parsedError.message) {
+                  errorMessage = parsedError.message
+                }
+              } catch {
+                // 使用默认错误消息
+              }
+              if (toolNameStreamTransformer) {
+                responseStream.write(
+                  `data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`
+                )
+              } else {
+                responseStream.write('event: error\n')
+                responseStream.write(
+                  `data: ${JSON.stringify({
+                    error: 'Claude API error',
+                    status: 429,
+                    details: errorBody429,
+                    timestamp: new Date().toISOString()
+                  })}\n\n`
+                )
+              }
+              responseStream.end()
+            }
+            reject(new Error(`Claude API error: 429`))
+            return
           }
 
           // 🔄 403 重试机制（必须在设置 res.on('data')/res.on('end') 之前处理）
@@ -2186,14 +2313,28 @@ class ClaudeRelayService {
                 await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
               }
             } else if (res.statusCode === 403) {
-              // 403 处理：走到这里说明重试已用尽或不适用重试，直接标记 blocked
+              // 403 处理：先检查是否为封禁性质的 403（组织被禁用/OAuth 被禁止）
               // 注意：重试逻辑已在 handleErrorResponse 外部提前处理
-              logger.error(
-                `🚫 [Stream] Forbidden error (403) detected for account ${accountId}${retryCount > 0 ? ` after ${retryCount} retries` : ''}, temporarily pausing`
-              )
-              await upstreamErrorHelper
-                .markTempUnavailable(accountId, accountType, 403)
-                .catch(() => {})
+              if (this._isOrganizationDisabledError(res.statusCode, errorData)) {
+                logger.error(
+                  `🚫 [Stream] Organization disabled/banned error (403) detected for account ${accountId}, marking as blocked`
+                )
+                await unifiedClaudeScheduler
+                  .markAccountBlocked(accountId, accountType, sessionHash)
+                  .catch((markError) => {
+                    logger.error(
+                      `❌ [Stream] Failed to mark account ${accountId} as blocked:`,
+                      markError
+                    )
+                  })
+              } else {
+                logger.error(
+                  `🚫 [Stream] Forbidden error (403) detected for account ${accountId}${retryCount > 0 ? ` after ${retryCount} retries` : ''}, temporarily pausing`
+                )
+                await upstreamErrorHelper
+                  .markTempUnavailable(accountId, accountType, 403)
+                  .catch(() => {})
+              }
               // 清除粘性会话，让后续请求路由到其他账户
               if (sessionHash) {
                 await unifiedClaudeScheduler.clearSessionMapping(sessionHash).catch(() => {})
@@ -2364,7 +2505,28 @@ class ClaudeRelayService {
         const requestedModel = body?.model || 'unknown'
         const { isRealClaudeCodeRequest } = requestOptions
 
-        res.on('data', (chunk) => {
+        // 🔧 处理上游 gzip/deflate 压缩：Anthropic (经 Cloudflare) 可能返回压缩响应
+        const upstreamEncoding = res.headers['content-encoding']
+        let dataSource = res
+        if (upstreamEncoding === 'gzip') {
+          dataSource = res.pipe(zlib.createGunzip())
+          dataSource.on('error', (err) => {
+            logger.error('❌ Gzip decompression error in stream:', err.message)
+            if (isStreamWritable(responseStream)) {
+              responseStream.end()
+            }
+          })
+        } else if (upstreamEncoding === 'deflate') {
+          dataSource = res.pipe(zlib.createInflate())
+          dataSource.on('error', (err) => {
+            logger.error('❌ Deflate decompression error in stream:', err.message)
+            if (isStreamWritable(responseStream)) {
+              responseStream.end()
+            }
+          })
+        }
+
+        dataSource.on('data', (chunk) => {
           try {
             const chunkStr = chunk.toString()
 
@@ -2509,7 +2671,7 @@ class ClaudeRelayService {
           }
         })
 
-        res.on('end', async () => {
+        dataSource.on('end', async () => {
           try {
             // 处理缓冲区中剩余的数据
             if (buffer.trim() && isStreamWritable(responseStream)) {
@@ -2838,13 +3000,14 @@ class ClaudeRelayService {
         `⏱️ ${prefix}${isTimeout ? 'Timeout' : 'Server'} error for account ${accountId}, error count: ${errorCount}/${threshold}`
       )
 
-      // 标记账户为临时不可用（5分钟）
+      // 标记账户为临时不可用（TTL 由 upstreamError 配置决定）
       try {
         await unifiedClaudeScheduler.markAccountTemporarilyUnavailable(
           accountId,
           accountType,
           sessionHash,
-          300
+          null,
+          statusCode
         )
       } catch (markError) {
         logger.error(`❌ Failed to mark account temporarily unavailable: ${accountId}`, markError)

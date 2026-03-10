@@ -52,13 +52,22 @@ class ModelService {
           'gpt-5.1-codex',
           'gpt-5.1-codex-max',
           'gpt-5-2025-08-07',
-          'gpt-5-codex'
+          'gpt-5-codex',
+          'gpt-5.3-codex',
+          'gpt-5.3-codex-spark',
+          'gpt-5.4',
+          'gpt-5.4-pro'
         ]
       },
       gemini: {
         provider: 'google',
         description: 'Google Gemini models',
-        models: ['gemini-2.5-pro', 'gemini-3-pro-preview', 'gemini-2.5-flash']
+        models: [
+          'gemini-2.5-pro',
+          'gemini-3-pro-preview',
+          'gemini-3.1-pro-preview',
+          'gemini-2.5-flash'
+        ]
       }
     }
   }

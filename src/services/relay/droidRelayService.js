@@ -91,7 +91,14 @@ class DroidRelayService {
     return normalizedBody
   }
 
-  async _applyRateLimitTracking(rateLimitInfo, usageSummary, model, context = '', keyId = null) {
+  async _applyRateLimitTracking(
+    rateLimitInfo,
+    usageSummary,
+    model,
+    context = '',
+    keyId = null,
+    preCalculatedCost = null
+  ) {
     if (!rateLimitInfo) {
       return
     }
@@ -102,7 +109,8 @@ class DroidRelayService {
         usageSummary,
         model,
         keyId,
-        'droid'
+        'droid',
+        preCalculatedCost
       )
 
       if (totalTokens > 0) {
@@ -616,7 +624,7 @@ class DroidRelayService {
 
           // 记录 usage 数据
           if (!skipUsageRecord) {
-            const normalizedUsage = await this._recordUsageFromStreamData(
+            const { normalizedUsage, costs: streamCosts } = await this._recordUsageFromStreamData(
               currentUsageData,
               apiKeyData,
               account,
@@ -635,7 +643,8 @@ class DroidRelayService {
               usageSummary,
               model,
               ' [stream]',
-              keyId
+              keyId,
+              streamCosts
             )
 
             logger.success(`Droid stream completed - Account: ${account.name}`)
@@ -871,8 +880,8 @@ class DroidRelayService {
    */
   async _recordUsageFromStreamData(usageData, apiKeyData, account, model) {
     const normalizedUsage = this._normalizeUsageSnapshot(usageData)
-    await this._recordUsage(apiKeyData, account, model, normalizedUsage)
-    return normalizedUsage
+    const costs = await this._recordUsage(apiKeyData, account, model, normalizedUsage)
+    return { normalizedUsage, costs }
   }
 
   /**
@@ -1234,7 +1243,7 @@ class DroidRelayService {
     const normalizedUsage = this._normalizeUsageSnapshot(usage)
 
     if (!skipUsageRecord) {
-      await this._recordUsage(apiKeyData, account, model, normalizedUsage)
+      const droidCosts = await this._recordUsage(apiKeyData, account, model, normalizedUsage)
 
       const totalTokens = this._getTotalTokens(normalizedUsage)
 
@@ -1256,7 +1265,8 @@ class DroidRelayService {
         usageSummary,
         model,
         endpointLabel,
-        keyId
+        keyId,
+        droidCosts
       )
 
       logger.success(
@@ -1283,15 +1293,22 @@ class DroidRelayService {
 
     if (totalTokens <= 0) {
       logger.debug('🪙 Droid usage 数据为空，跳过记录')
-      return
+      return { realCost: 0, ratedCost: 0 }
     }
 
     try {
       const keyId = apiKeyData?.id
       const accountId = this._extractAccountId(account)
+      let costs = { realCost: 0, ratedCost: 0 }
 
       if (keyId) {
-        await apiKeyService.recordUsageWithDetails(keyId, usageObject, model, accountId, 'droid')
+        costs = await apiKeyService.recordUsageWithDetails(
+          keyId,
+          usageObject,
+          model,
+          accountId,
+          'droid'
+        )
       } else if (accountId) {
         await redis.incrementAccountUsage(
           accountId,
@@ -1300,19 +1317,24 @@ class DroidRelayService {
           usageObject.output_tokens || 0,
           usageObject.cache_creation_input_tokens || 0,
           usageObject.cache_read_input_tokens || 0,
+          0, // ephemeral5mTokens - Droid 不含详细缓存数据
+          0, // ephemeral1hTokens - Droid 不含详细缓存数据
           model,
           false
         )
       } else {
         logger.warn('⚠️ 无法记录 Droid usage：缺少 API Key 和账户标识')
-        return
+        return { realCost: 0, ratedCost: 0 }
       }
 
       logger.debug(
         `📊 Droid usage recorded - Key: ${keyId || 'unknown'}, Account: ${accountId || 'unknown'}, Model: ${model}, Input: ${usageObject.input_tokens || 0}, Output: ${usageObject.output_tokens || 0}, Cache Create: ${usageObject.cache_creation_input_tokens || 0}, Cache Read: ${usageObject.cache_read_input_tokens || 0}, Total: ${totalTokens}`
       )
+
+      return costs
     } catch (error) {
       logger.error('❌ Failed to record Droid usage:', error)
+      return { realCost: 0, ratedCost: 0 }
     }
   }
 

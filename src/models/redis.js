@@ -50,6 +50,82 @@ function getWeekStringInTimezone(date = new Date()) {
   return `${year}-W${String(weekNumber).padStart(2, '0')}`
 }
 
+// 获取基于自定义重置日/时的周期标识符 (YYYY-MM-DDThh 格式)
+// resetDay: 1-7 (周一到周日)，默认 1 (周一)
+// resetHour: 0-23，默认 0 (00:00)
+function getPeriodString(resetDay = 1, resetHour = 0, date = new Date()) {
+  const tzDate = getDateInTimezone(date)
+
+  // 当前时区时间的 ISO 星期几 (1=周一 ... 7=周日)
+  const currentDay = tzDate.getUTCDay() || 7
+  const currentHour = tzDate.getUTCHours()
+
+  // 计算距上次重置已过的天数
+  let daysSinceReset = (currentDay - resetDay + 7) % 7
+  // 如果同一天但还没到重置时间，视为上一个周期
+  if (daysSinceReset === 0 && currentHour < resetHour) {
+    daysSinceReset = 7
+  }
+
+  // 回退到周期起始日
+  const periodStart = new Date(tzDate)
+  periodStart.setUTCDate(tzDate.getUTCDate() - daysSinceReset)
+  periodStart.setUTCHours(resetHour, 0, 0, 0)
+
+  const y = periodStart.getUTCFullYear()
+  const m = String(periodStart.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(periodStart.getUTCDate()).padStart(2, '0')
+  const h = String(periodStart.getUTCHours()).padStart(2, '0')
+
+  return `${y}-${m}-${d}T${h}`
+}
+
+// 获取下次重置的真实 UTC 时间（用于 402 响应中的 resetAt）
+// resetDay: 1-7 (周一到周日)，默认 1 (周一)
+// resetHour: 0-23，默认 0 (00:00)
+function getNextResetTime(resetDay = 1, resetHour = 0) {
+  const offset = config.system.timezoneOffset || 8
+  const tzDate = getDateInTimezone(new Date())
+
+  const currentDay = tzDate.getUTCDay() || 7
+  const currentHour = tzDate.getUTCHours()
+
+  let daysUntilReset = (resetDay - currentDay + 7) % 7
+  // 如果同一天但已过重置时间，等到下周
+  if (daysUntilReset === 0 && currentHour >= resetHour) {
+    daysUntilReset = 7
+  }
+
+  // 构造时区下的重置时间
+  const resetTz = new Date(tzDate)
+  resetTz.setUTCDate(tzDate.getUTCDate() + daysUntilReset)
+  resetTz.setUTCHours(resetHour, 0, 0, 0)
+
+  // 转换回真实 UTC：减去时区偏移
+  const resetUtc = new Date(resetTz.getTime() - offset * 3600000)
+  return resetUtc
+}
+
+// 获取周期起始日期的 Date 对象（时区下），用于回填时判断日期是否在当前周期内
+// 返回 getDateInTimezone 风格的 Date，可用 getUTC* 获取时区本地值
+function getPeriodStartDate(resetDay = 1, resetHour = 0, date = new Date()) {
+  const tzDate = getDateInTimezone(date)
+
+  const currentDay = tzDate.getUTCDay() || 7
+  const currentHour = tzDate.getUTCHours()
+
+  let daysSinceReset = (currentDay - resetDay + 7) % 7
+  if (daysSinceReset === 0 && currentHour < resetHour) {
+    daysSinceReset = 7
+  }
+
+  const periodStart = new Date(tzDate)
+  periodStart.setUTCDate(tzDate.getUTCDate() - daysSinceReset)
+  periodStart.setUTCHours(resetHour, 0, 0, 0)
+
+  return periodStart
+}
+
 // 并发队列相关常量
 const QUEUE_STATS_TTL_SECONDS = 86400 * 7 // 统计计数保留 7 天
 const WAIT_TIME_TTL_SECONDS = 86400 // 等待时间样本保留 1 天（滚动窗口，无需长期保留）
@@ -697,7 +773,7 @@ class RedisClient {
     const parsed = { ...data }
 
     // 布尔字段
-    const boolFields = ['isActive', 'enableModelRestriction', 'isDeleted']
+    const boolFields = ['isActive', 'enableModelRestriction', 'isDeleted', 'allow1mContext']
     for (const field of boolFields) {
       if (parsed[field] !== undefined) {
         parsed[field] = parsed[field] === 'true'
@@ -1084,6 +1160,9 @@ class RedisClient {
     pipeline.hincrby(modelDaily, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(modelDaily, 'allTokens', totalTokens)
     pipeline.hincrby(modelDaily, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(modelDaily, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(modelDaily, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // 按模型统计 - 每月
     pipeline.hincrby(modelMonthly, 'inputTokens', finalInputTokens)
@@ -1092,6 +1171,9 @@ class RedisClient {
     pipeline.hincrby(modelMonthly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(modelMonthly, 'allTokens', totalTokens)
     pipeline.hincrby(modelMonthly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(modelMonthly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(modelMonthly, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // API Key级别的模型统计 - 每日
     pipeline.hincrby(keyModelDaily, 'inputTokens', finalInputTokens)
@@ -1136,6 +1218,9 @@ class RedisClient {
     pipeline.hincrby(keyModelAlltime, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(keyModelAlltime, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(keyModelAlltime, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(keyModelAlltime, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(keyModelAlltime, 'ephemeral1hTokens', ephemeral1hTokens)
     // 费用统计
     if (realCost > 0) {
       pipeline.hincrby(keyModelAlltime, 'realCostMicro', Math.round(realCost * 1000000))
@@ -1152,6 +1237,9 @@ class RedisClient {
     pipeline.hincrby(hourly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(hourly, 'allTokens', totalTokens)
     pipeline.hincrby(hourly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(hourly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(hourly, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // 按模型统计 - 每小时
     pipeline.hincrby(modelHourly, 'inputTokens', finalInputTokens)
@@ -1160,6 +1248,9 @@ class RedisClient {
     pipeline.hincrby(modelHourly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(modelHourly, 'allTokens', totalTokens)
     pipeline.hincrby(modelHourly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(modelHourly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(modelHourly, 'ephemeral1hTokens', ephemeral1hTokens)
 
     // API Key级别的模型统计 - 每小时
     pipeline.hincrby(keyModelHourly, 'inputTokens', finalInputTokens)
@@ -1168,6 +1259,9 @@ class RedisClient {
     pipeline.hincrby(keyModelHourly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(keyModelHourly, 'allTokens', totalTokens)
     pipeline.hincrby(keyModelHourly, 'requests', 1)
+    // 详细缓存类型统计
+    pipeline.hincrby(keyModelHourly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(keyModelHourly, 'ephemeral1hTokens', ephemeral1hTokens)
     // 费用统计
     if (realCost > 0) {
       pipeline.hincrby(keyModelHourly, 'realCostMicro', Math.round(realCost * 1000000))
@@ -1235,18 +1329,24 @@ class RedisClient {
     pipeline.hincrby('usage:global:total', 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby('usage:global:total', 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby('usage:global:total', 'allTokens', totalTokens)
+    pipeline.hincrby('usage:global:total', 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby('usage:global:total', 'ephemeral1hTokens', ephemeral1hTokens)
     pipeline.hincrby(globalDaily, 'requests', 1)
     pipeline.hincrby(globalDaily, 'inputTokens', finalInputTokens)
     pipeline.hincrby(globalDaily, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(globalDaily, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(globalDaily, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(globalDaily, 'allTokens', totalTokens)
+    pipeline.hincrby(globalDaily, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(globalDaily, 'ephemeral1hTokens', ephemeral1hTokens)
     pipeline.hincrby(globalMonthly, 'requests', 1)
     pipeline.hincrby(globalMonthly, 'inputTokens', finalInputTokens)
     pipeline.hincrby(globalMonthly, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(globalMonthly, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(globalMonthly, 'cacheReadTokens', finalCacheReadTokens)
     pipeline.hincrby(globalMonthly, 'allTokens', totalTokens)
+    pipeline.hincrby(globalMonthly, 'ephemeral5mTokens', ephemeral5mTokens)
+    pipeline.hincrby(globalMonthly, 'ephemeral1hTokens', ephemeral1hTokens)
     pipeline.expire(globalDaily, 86400 * 32)
     pipeline.expire(globalMonthly, 86400 * 365)
 
@@ -1262,6 +1362,8 @@ class RedisClient {
     outputTokens = 0,
     cacheCreateTokens = 0,
     cacheReadTokens = 0,
+    ephemeral5mTokens = 0,
+    ephemeral1hTokens = 0,
     model = 'unknown',
     isLongContextRequest = false
   ) {
@@ -1293,6 +1395,8 @@ class RedisClient {
     const finalOutputTokens = outputTokens || 0
     const finalCacheCreateTokens = cacheCreateTokens || 0
     const finalCacheReadTokens = cacheReadTokens || 0
+    const finalEphemeral5mTokens = ephemeral5mTokens || 0
+    const finalEphemeral1hTokens = ephemeral1hTokens || 0
     const actualTotalTokens =
       finalInputTokens + finalOutputTokens + finalCacheCreateTokens + finalCacheReadTokens
     const coreTokens = finalInputTokens + finalOutputTokens
@@ -1305,6 +1409,8 @@ class RedisClient {
       this.client.hincrby(accountKey, 'totalOutputTokens', finalOutputTokens),
       this.client.hincrby(accountKey, 'totalCacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountKey, 'totalCacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountKey, 'totalEphemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountKey, 'totalEphemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountKey, 'totalAllTokens', actualTotalTokens),
       this.client.hincrby(accountKey, 'totalRequests', 1),
 
@@ -1314,6 +1420,8 @@ class RedisClient {
       this.client.hincrby(accountDaily, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountDaily, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountDaily, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountDaily, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountDaily, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountDaily, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountDaily, 'requests', 1),
 
@@ -1323,6 +1431,8 @@ class RedisClient {
       this.client.hincrby(accountMonthly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountMonthly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountMonthly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountMonthly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountMonthly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountMonthly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountMonthly, 'requests', 1),
 
@@ -1332,6 +1442,8 @@ class RedisClient {
       this.client.hincrby(accountHourly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountHourly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountHourly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountHourly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountHourly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountHourly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountHourly, 'requests', 1),
 
@@ -1352,6 +1464,16 @@ class RedisClient {
         `model:${normalizedModel}:cacheReadTokens`,
         finalCacheReadTokens
       ),
+      this.client.hincrby(
+        accountHourly,
+        `model:${normalizedModel}:ephemeral5mTokens`,
+        finalEphemeral5mTokens
+      ),
+      this.client.hincrby(
+        accountHourly,
+        `model:${normalizedModel}:ephemeral1hTokens`,
+        finalEphemeral1hTokens
+      ),
       this.client.hincrby(accountHourly, `model:${normalizedModel}:allTokens`, actualTotalTokens),
       this.client.hincrby(accountHourly, `model:${normalizedModel}:requests`, 1),
 
@@ -1360,6 +1482,8 @@ class RedisClient {
       this.client.hincrby(accountModelDaily, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountModelDaily, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountModelDaily, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountModelDaily, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountModelDaily, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountModelDaily, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountModelDaily, 'requests', 1),
 
@@ -1368,6 +1492,8 @@ class RedisClient {
       this.client.hincrby(accountModelMonthly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountModelMonthly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountModelMonthly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountModelMonthly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountModelMonthly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountModelMonthly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountModelMonthly, 'requests', 1),
 
@@ -1376,6 +1502,8 @@ class RedisClient {
       this.client.hincrby(accountModelHourly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountModelHourly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountModelHourly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountModelHourly, 'ephemeral5mTokens', finalEphemeral5mTokens),
+      this.client.hincrby(accountModelHourly, 'ephemeral1hTokens', finalEphemeral1hTokens),
       this.client.hincrby(accountModelHourly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountModelHourly, 'requests', 1),
 
@@ -1753,31 +1881,31 @@ class RedisClient {
     }
   }
 
-  // 💰 获取本周 Opus 费用
-  async getWeeklyOpusCost(keyId) {
-    const currentWeek = getWeekStringInTimezone()
-    const costKey = `usage:opus:weekly:${keyId}:${currentWeek}`
+  // 💰 获取本周 Opus 费用（支持自定义重置周期）
+  async getWeeklyOpusCost(keyId, resetDay = 1, resetHour = 0) {
+    const periodStr = getPeriodString(resetDay, resetHour)
+    const costKey = `usage:opus:weekly:${keyId}:${periodStr}`
     const cost = await this.client.get(costKey)
     const result = parseFloat(cost || 0)
     logger.debug(
-      `💰 Getting weekly Opus cost for ${keyId}, week: ${currentWeek}, key: ${costKey}, value: ${cost}, result: ${result}`
+      `💰 Getting weekly Opus cost for ${keyId}, period: ${periodStr}, key: ${costKey}, value: ${cost}, result: ${result}`
     )
     return result
   }
 
-  // 💰 增加本周 Opus 费用（支持倍率成本和真实成本）
+  // 💰 增加本周 Opus 费用（支持倍率成本和真实成本，支持自定义重置周期）
   // amount: 倍率后的成本（用于限额校验）
   // realAmount: 真实成本（用于对账），如果不传则等于 amount
-  async incrementWeeklyOpusCost(keyId, amount, realAmount = null) {
-    const currentWeek = getWeekStringInTimezone()
-    const weeklyKey = `usage:opus:weekly:${keyId}:${currentWeek}`
+  async incrementWeeklyOpusCost(keyId, amount, realAmount = null, resetDay = 1, resetHour = 0) {
+    const periodStr = getPeriodString(resetDay, resetHour)
+    const weeklyKey = `usage:opus:weekly:${keyId}:${periodStr}`
     const totalKey = `usage:opus:total:${keyId}`
-    const realWeeklyKey = `usage:opus:real:weekly:${keyId}:${currentWeek}`
+    const realWeeklyKey = `usage:opus:real:weekly:${keyId}:${periodStr}`
     const realTotalKey = `usage:opus:real:total:${keyId}`
     const actualRealAmount = realAmount !== null ? realAmount : amount
 
     logger.debug(
-      `💰 Incrementing weekly Opus cost for ${keyId}, week: ${currentWeek}, rated: $${amount}, real: $${actualRealAmount}`
+      `💰 Incrementing weekly Opus cost for ${keyId}, period: ${periodStr}, rated: $${amount}, real: $${actualRealAmount}`
     )
 
     // 使用 pipeline 批量执行，提高性能
@@ -1794,13 +1922,13 @@ class RedisClient {
     logger.debug(`💰 Opus cost incremented successfully, new weekly total: $${results[0][1]}`)
   }
 
-  // 💰 覆盖设置本周 Opus 费用（用于启动回填/迁移）
-  async setWeeklyOpusCost(keyId, amount, weekString = null) {
-    const currentWeek = weekString || getWeekStringInTimezone()
-    const weeklyKey = `usage:opus:weekly:${keyId}:${currentWeek}`
+  // 💰 覆盖设置本周 Opus 费用（用于启动回填/迁移，支持自定义周期标识）
+  async setWeeklyOpusCost(keyId, amount, periodString = null, resetDay = 1, resetHour = 0) {
+    const currentPeriod = periodString || getPeriodString(resetDay, resetHour)
+    const weeklyKey = `usage:opus:weekly:${keyId}:${currentPeriod}`
 
     await this.client.set(weeklyKey, String(amount || 0))
-    // 保留 2 周，足够覆盖"当前周 + 上周"查看/回填
+    // 保留 2 周，足够覆盖"当前周期 + 上周期"查看/回填
     await this.client.expire(weeklyKey, 14 * 24 * 3600)
   }
 
@@ -1841,6 +1969,16 @@ class RedisClient {
           output_tokens: parseInt(modelUsage.outputTokens || 0),
           cache_creation_input_tokens: parseInt(modelUsage.cacheCreateTokens || 0),
           cache_read_input_tokens: parseInt(modelUsage.cacheReadTokens || 0)
+        }
+
+        // 添加 cache_creation 子对象以支持精确 ephemeral 定价
+        const eph5m = parseInt(modelUsage.ephemeral5mTokens) || 0
+        const eph1h = parseInt(modelUsage.ephemeral1hTokens) || 0
+        if (eph5m > 0 || eph1h > 0) {
+          usage.cache_creation = {
+            ephemeral_5m_input_tokens: eph5m,
+            ephemeral_1h_input_tokens: eph1h
+          }
         }
 
         const costResult = CostCalculator.calculateCost(usage, model)
@@ -1931,6 +2069,16 @@ class RedisClient {
           cache_read_input_tokens: parseInt(modelUsage.cacheReadTokens || 0)
         }
 
+        // 添加 cache_creation 子对象以支持精确 ephemeral 定价
+        const eph5m = parseInt(modelUsage.ephemeral5mTokens) || 0
+        const eph1h = parseInt(modelUsage.ephemeral1hTokens) || 0
+        if (eph5m > 0 || eph1h > 0) {
+          usage.cache_creation = {
+            ephemeral_5m_input_tokens: eph5m,
+            ephemeral_1h_input_tokens: eph1h
+          }
+        }
+
         const costResult = CostCalculator.calculateCost(usage, model)
         costMap.set(accountId, costMap.get(accountId) + costResult.costs.total)
       }
@@ -1972,6 +2120,17 @@ class RedisClient {
           cache_creation_input_tokens: parseInt(modelUsage.cacheCreateTokens || 0),
           cache_read_input_tokens: parseInt(modelUsage.cacheReadTokens || 0)
         }
+
+        // 添加 cache_creation 子对象以支持精确 ephemeral 定价
+        const eph5m = parseInt(modelUsage.ephemeral5mTokens) || 0
+        const eph1h = parseInt(modelUsage.ephemeral1hTokens) || 0
+        if (eph5m > 0 || eph1h > 0) {
+          usage.cache_creation = {
+            ephemeral_5m_input_tokens: eph5m,
+            ephemeral_1h_input_tokens: eph1h
+          }
+        }
+
         const costResult = CostCalculator.calculateCost(usage, model)
         totalCost += costResult.costs.total
       }
@@ -3622,6 +3781,8 @@ class RedisClient {
                   outputTokens: 0,
                   cacheCreateTokens: 0,
                   cacheReadTokens: 0,
+                  ephemeral5mTokens: 0,
+                  ephemeral1hTokens: 0,
                   allTokens: 0,
                   requests: 0
                 }
@@ -3635,6 +3796,10 @@ class RedisClient {
                 modelUsage[modelName].cacheCreateTokens += parseInt(value || 0)
               } else if (metric === 'cacheReadTokens') {
                 modelUsage[modelName].cacheReadTokens += parseInt(value || 0)
+              } else if (metric === 'ephemeral5mTokens') {
+                modelUsage[modelName].ephemeral5mTokens += parseInt(value || 0)
+              } else if (metric === 'ephemeral1hTokens') {
+                modelUsage[modelName].ephemeral1hTokens += parseInt(value || 0)
               } else if (metric === 'allTokens') {
                 modelUsage[modelName].allTokens += parseInt(value || 0)
               } else if (metric === 'requests') {
@@ -3716,6 +3881,9 @@ redisClient.getDateInTimezone = getDateInTimezone
 redisClient.getDateStringInTimezone = getDateStringInTimezone
 redisClient.getHourInTimezone = getHourInTimezone
 redisClient.getWeekStringInTimezone = getWeekStringInTimezone
+redisClient.getPeriodString = getPeriodString
+redisClient.getNextResetTime = getNextResetTime
+redisClient.getPeriodStartDate = getPeriodStartDate
 
 // ============== 用户消息队列相关方法 ==============
 

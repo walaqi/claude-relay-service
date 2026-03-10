@@ -428,9 +428,43 @@
                 type="number"
               />
               <p class="text-xs text-gray-500 dark:text-gray-400">
-                设置 Claude 模型的周费用限制（周一到周日），仅对 Claude 模型请求生效，0
-                或留空表示无限制
+                设置 Claude 模型的周费用限制，仅对 Claude 模型请求生效，0 或留空表示无限制
               </p>
+              <div
+                v-if="form.weeklyOpusCostLimit && Number(form.weeklyOpusCostLimit) > 0"
+                class="mt-2 flex gap-3"
+              >
+                <div class="flex-1">
+                  <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >重置日</label
+                  >
+                  <select
+                    v-model="form.weeklyResetDay"
+                    class="form-input w-full border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  >
+                    <option :value="1">周一</option>
+                    <option :value="2">周二</option>
+                    <option :value="3">周三</option>
+                    <option :value="4">周四</option>
+                    <option :value="5">周五</option>
+                    <option :value="6">周六</option>
+                    <option :value="7">周日</option>
+                  </select>
+                </div>
+                <div class="flex-1">
+                  <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >重置时间 (UTC+8)</label
+                  >
+                  <select
+                    v-model="form.weeklyResetHour"
+                    class="form-input w-full border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  >
+                    <option v-for="h in 24" :key="h - 1" :value="h - 1">
+                      {{ String(h - 1).padStart(2, '0') }}:00
+                    </option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -904,6 +938,27 @@
             </div>
           </div>
 
+          <!-- 允许 1M 上下文 -->
+          <div>
+            <div class="mb-2 flex items-center">
+              <input
+                id="allow1mContext"
+                v-model="form.allow1mContext"
+                class="h-4 w-4 rounded border-gray-300 bg-gray-100 text-blue-600 focus:ring-blue-500"
+                type="checkbox"
+              />
+              <label
+                class="ml-2 cursor-pointer text-sm font-semibold text-gray-700 dark:text-gray-300"
+                for="allow1mContext"
+              >
+                允许 1M 上下文
+              </label>
+            </div>
+            <p class="ml-6 text-xs text-gray-500 dark:text-gray-400">
+              启用后允许使用 [1m] 模型（需要 Bedrock 账户支持）
+            </p>
+          </div>
+
           <div class="flex gap-3 pt-2">
             <button
               class="flex-1 rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
@@ -1061,6 +1116,8 @@ const form = reactive({
   dailyCostLimit: '',
   totalCostLimit: '',
   weeklyOpusCostLimit: '',
+  weeklyResetDay: 1,
+  weeklyResetHour: 0,
   expireDuration: '',
   customExpireDate: '',
   expiresAt: null,
@@ -1078,6 +1135,7 @@ const form = reactive({
   modelInput: '',
   enableClientRestriction: false,
   allowedClients: [],
+  allow1mContext: false,
   tags: []
 })
 
@@ -1495,6 +1553,8 @@ const createApiKey = async () => {
         form.weeklyOpusCostLimit !== '' && form.weeklyOpusCostLimit !== null
           ? parseFloat(form.weeklyOpusCostLimit)
           : 0,
+      weeklyResetDay: form.weeklyResetDay,
+      weeklyResetHour: form.weeklyResetHour,
       expiresAt: form.expirationMode === 'fixed' ? form.expiresAt || undefined : undefined,
       expirationMode: form.expirationMode,
       activationDays: form.expirationMode === 'activation' ? form.activationDays : undefined,
@@ -1504,7 +1564,8 @@ const createApiKey = async () => {
       enableModelRestriction: form.enableModelRestriction,
       restrictedModels: form.restrictedModels,
       enableClientRestriction: form.enableClientRestriction,
-      allowedClients: form.allowedClients
+      allowedClients: form.allowedClients,
+      allow1mContext: form.allow1mContext
     }
 
     // 处理Claude账户绑定（区分OAuth和Console）
