@@ -74,7 +74,7 @@ class BedrockRelayService {
 
     // Bedrock API Key (ABSK) 模式：注入 Bearer Token 到 Authorization header
     if (bedrockAccount?.bearerToken) {
-      const bearerToken = bedrockAccount.bearerToken
+      const { bearerToken } = bedrockAccount
       client.middlewareStack.add(
         (next) => async (args) => {
           // 清除 SigV4 签名产生的所有 authorization header（大小写均删除）
