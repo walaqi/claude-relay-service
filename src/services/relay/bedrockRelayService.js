@@ -400,18 +400,26 @@ class BedrockRelayService {
     } catch (error) {
       logger.error('❌ Bedrock流式请求失败:', error)
 
-      // 发送错误事件
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' })
+      const bedrockError = this._handleBedrockError(error, accountId, bedrockAccount)
+
+      // 发送错误事件并关闭连接
+      try {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'text/event-stream' })
+        }
+        if (!res.writableEnded) {
+          res.write('event: error\n')
+          res.write(`data: ${JSON.stringify({ error: bedrockError.message })}\n\n`)
+          res.end()
+        }
+      } catch (writeError) {
+        logger.error('❌ Failed to write error response:', writeError.message)
+        if (!res.writableEnded) {
+          res.end()
+        }
       }
 
-      res.write('event: error\n')
-      res.write(
-        `data: ${JSON.stringify({ error: this._handleBedrockError(error, accountId, bedrockAccount).message })}\n\n`
-      )
-      res.end()
-
-      throw this._handleBedrockError(error, accountId, bedrockAccount)
+      throw bedrockError
     } finally {
       // 📬 释放用户消息队列锁（兜底，正常情况下已在请求发送后提前释放）
       if (queueLockAcquired && queueRequestId && accountId) {
