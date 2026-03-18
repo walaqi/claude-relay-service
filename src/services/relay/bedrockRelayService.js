@@ -627,6 +627,16 @@ class BedrockRelayService {
       bedrockPayload.tool_choice = requestBody.tool_choice
     }
 
+    // Extended thinking 支持
+    if (requestBody.thinking) {
+      bedrockPayload.thinking = requestBody.thinking
+    }
+
+    // metadata 透传
+    if (requestBody.metadata) {
+      bedrockPayload.metadata = requestBody.metadata
+    }
+
     // Sanitize cache_control for Bedrock compatibility (strip unsupported fields like "scope")
     this._sanitizeCacheControl(bedrockPayload)
 
