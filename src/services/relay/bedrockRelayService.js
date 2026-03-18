@@ -598,9 +598,14 @@ class BedrockRelayService {
 
   // 转换Claude格式请求到Bedrock格式
   _convertToBedrockFormat(requestBody) {
+    // 当启用 thinking 时，max_tokens 必须大于 budget_tokens，不能强制限制
+    const maxTokens = requestBody.thinking
+      ? requestBody.max_tokens || this.maxOutputTokens
+      : Math.min(requestBody.max_tokens || this.maxOutputTokens, this.maxOutputTokens)
+
     const bedrockPayload = {
       anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: Math.min(requestBody.max_tokens || this.maxOutputTokens, this.maxOutputTokens),
+      max_tokens: maxTokens,
       messages: requestBody.messages || []
     }
 
