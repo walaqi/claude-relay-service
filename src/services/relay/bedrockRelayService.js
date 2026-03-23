@@ -641,8 +641,12 @@ class BedrockRelayService {
     }
 
     // Extended thinking 支持
+    // Bedrock 只支持 "enabled" / "disabled"，不支持 "adaptive"
     if (requestBody.thinking) {
-      bedrockPayload.thinking = requestBody.thinking
+      bedrockPayload.thinking = { ...requestBody.thinking }
+      if (bedrockPayload.thinking.type === 'adaptive') {
+        bedrockPayload.thinking.type = 'enabled'
+      }
     }
 
     // metadata 透传
