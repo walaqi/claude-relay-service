@@ -642,10 +642,14 @@ class BedrockRelayService {
 
     // Extended thinking 支持
     // Bedrock 只支持 "enabled" / "disabled"，不支持 "adaptive"
+    // adaptive 模式不要求 budget_tokens，但 Bedrock enabled 必须有
     if (requestBody.thinking) {
       bedrockPayload.thinking = { ...requestBody.thinking }
       if (bedrockPayload.thinking.type === 'adaptive') {
         bedrockPayload.thinking.type = 'enabled'
+        if (!bedrockPayload.thinking.budget_tokens) {
+          bedrockPayload.thinking.budget_tokens = maxTokens - 1
+        }
       }
     }
 
