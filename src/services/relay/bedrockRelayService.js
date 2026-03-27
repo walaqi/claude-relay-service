@@ -23,7 +23,6 @@ class BedrockRelayService {
     // Token配置
     this.maxOutputTokens = parseInt(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS) || 4096
     this.maxThinkingTokens = parseInt(process.env.MAX_THINKING_TOKENS) || 1024
-    this.enablePromptCaching = process.env.DISABLE_PROMPT_CACHING !== '1'
 
     // 创建Bedrock客户端
     this.clients = new Map() // 缓存不同区域的客户端
@@ -242,10 +241,11 @@ class BedrockRelayService {
   }
 
   // 处理流式请求
-  async handleStreamRequest(requestBody, bedrockAccount = null, res) {
+  async handleStreamRequest(requestBody, bedrockAccount = null, res, req = null) {
     const accountId = bedrockAccount?.id
     let queueLockAcquired = false
     let queueRequestId = null
+    let abortController = null
 
     try {
       // 📬 用户消息队列处理
@@ -327,8 +327,19 @@ class BedrockRelayService {
 
       logger.debug(`🌊 Bedrock流式请求 - 模型: ${modelId}, 区域: ${region}`)
 
+      // 创建 AbortController 用于客户端断开时取消上游请求
+      abortController = new AbortController()
+      if (req) {
+        req.on('close', () => {
+          if (abortController && !abortController.signal.aborted) {
+            logger.info(`🔌 客户端断开，取消 Bedrock 上游请求 - 账户: ${accountId}`)
+            abortController.abort()
+          }
+        })
+      }
+
       const startTime = Date.now()
-      const response = await client.send(command)
+      const response = await client.send(command, { abortSignal: abortController.signal })
 
       // 📬 请求已发送成功，立即释放队列锁（无需等待响应处理完成）
       // 因为限流基于请求发送时刻计算（RPM），不是请求完成时刻
@@ -369,6 +380,12 @@ class BedrockRelayService {
       // Bedrock InvokeModelWithResponseStream 返回的 JSON 事件结构与 Claude API 完全一致，
       // 直接透传即可，无需重新构造。避免丢失字段或与新版本 API 不兼容。
       for await (const chunk of response.body) {
+        // 客户端已断开，停止处理
+        if (abortController.signal.aborted) {
+          logger.debug(`🔌 Bedrock 流处理中止 - 客户端已断开`)
+          break
+        }
+
         if (chunk.chunk) {
           const chunkData = JSON.parse(new TextDecoder().decode(chunk.chunk.bytes))
 
@@ -400,14 +417,24 @@ class BedrockRelayService {
         duration
       }
     } catch (error) {
+      // 客户端主动断开，不算错误
+      if (abortController?.signal?.aborted) {
+        logger.info(`🔌 Bedrock 流请求因客户端断开而中止 - 账户: ${accountId}`)
+        if (!res.writableEnded) {
+          res.end()
+        }
+        return { success: false, aborted: true }
+      }
+
       logger.error('❌ Bedrock流式请求失败:', error)
 
       const bedrockError = this._handleBedrockError(error, accountId, bedrockAccount)
+      const statusCode = this._getErrorStatusCode(error)
 
       // 发送错误事件并关闭连接
       try {
         if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'text/event-stream' })
+          res.writeHead(statusCode, { 'Content-Type': 'text/event-stream' })
         }
         if (!res.writableEnded) {
           res.write('event: error\n')
@@ -605,6 +632,7 @@ class BedrockRelayService {
       ? requestBody.max_tokens || this.maxOutputTokens
       : Math.min(requestBody.max_tokens || this.maxOutputTokens, this.maxOutputTokens)
 
+    // Bedrock 通过 Command 类型区分流式/非流式，payload 中不需要 stream 字段
     const bedrockPayload = {
       anthropic_version: 'bedrock-2023-05-31',
       max_tokens: maxTokens,
@@ -669,9 +697,9 @@ class BedrockRelayService {
   // 转换Bedrock响应到Claude格式
   _convertFromBedrockFormat(bedrockResponse) {
     return {
-      id: `msg_${Date.now()}_bedrock`,
+      id: bedrockResponse.id || `msg_${Date.now()}_bedrock`,
       type: 'message',
-      role: 'assistant',
+      role: bedrockResponse.role || 'assistant',
       content: bedrockResponse.content || [],
       model: bedrockResponse.model || this.defaultModel,
       stop_reason: bedrockResponse.stop_reason || 'end_turn',
@@ -683,80 +711,25 @@ class BedrockRelayService {
     }
   }
 
-  // 转换Bedrock流事件到Claude SSE格式
-  _convertBedrockStreamToClaudeFormat(bedrockChunk) {
-    if (bedrockChunk.type === 'message_start') {
-      return {
-        type: 'message_start',
-        data: {
-          type: 'message_start',
-          message: {
-            id: `msg_${Date.now()}_bedrock`,
-            type: 'message',
-            role: 'assistant',
-            content: [],
-            model: this.defaultModel,
-            stop_reason: null,
-            stop_sequence: null,
-            usage: bedrockChunk.message?.usage || { input_tokens: 0, output_tokens: 0 }
-          }
-        }
-      }
+  // 从 Bedrock 错误中提取 HTTP 状态码
+  _getErrorStatusCode(error) {
+    // AWS SDK v3 错误的 $metadata 包含 httpStatusCode
+    if (error.$metadata?.httpStatusCode) {
+      return error.$metadata.httpStatusCode
     }
 
-    if (bedrockChunk.type === 'content_block_start') {
-      return {
-        type: 'content_block_start',
-        data: {
-          type: 'content_block_start',
-          index: bedrockChunk.index || 0,
-          content_block: bedrockChunk.content_block || { type: 'text', text: '' }
-        }
-      }
+    // 根据错误类型映射状态码
+    const errorStatusMap = {
+      ThrottlingException: 429,
+      AccessDeniedException: 403,
+      ValidationException: 400,
+      ModelNotReadyException: 503,
+      ServiceUnavailableException: 503,
+      InternalServerException: 500,
+      ModelTimeoutException: 408
     }
 
-    if (bedrockChunk.type === 'content_block_delta') {
-      return {
-        type: 'content_block_delta',
-        data: {
-          type: 'content_block_delta',
-          index: bedrockChunk.index || 0,
-          delta: bedrockChunk.delta || {}
-        }
-      }
-    }
-
-    if (bedrockChunk.type === 'content_block_stop') {
-      return {
-        type: 'content_block_stop',
-        data: {
-          type: 'content_block_stop',
-          index: bedrockChunk.index || 0
-        }
-      }
-    }
-
-    if (bedrockChunk.type === 'message_delta') {
-      return {
-        type: 'message_delta',
-        data: {
-          type: 'message_delta',
-          delta: bedrockChunk.delta || {},
-          usage: bedrockChunk.usage || {}
-        }
-      }
-    }
-
-    if (bedrockChunk.type === 'message_stop') {
-      return {
-        type: 'message_stop',
-        data: {
-          type: 'message_stop'
-        }
-      }
-    }
-
-    return null
+    return errorStatusMap[error.name] || 500
   }
 
   // 处理Bedrock错误
