@@ -360,25 +360,23 @@ class BedrockRelayService {
       })
 
       let totalUsage = null
-      let isFirstChunk = true
 
       // 处理流式响应
+      // Bedrock InvokeModelWithResponseStream 返回的 JSON 事件结构与 Claude API 完全一致，
+      // 直接透传即可，无需重新构造。避免丢失字段或与新版本 API 不兼容。
       for await (const chunk of response.body) {
         if (chunk.chunk) {
           const chunkData = JSON.parse(new TextDecoder().decode(chunk.chunk.bytes))
-          const claudeEvent = this._convertBedrockStreamToClaudeFormat(chunkData, isFirstChunk)
 
-          if (claudeEvent) {
-            // 发送SSE事件
-            res.write(`event: ${claudeEvent.type}\n`)
-            res.write(`data: ${JSON.stringify(claudeEvent.data)}\n\n`)
+          // 直接透传 Bedrock 事件到客户端（格式与 Claude SSE 一致）
+          if (chunkData.type) {
+            res.write(`event: ${chunkData.type}\n`)
+            res.write(`data: ${JSON.stringify(chunkData)}\n\n`)
+          }
 
-            // 提取使用统计 (usage is reported in message_delta per Claude API spec)
-            if (claudeEvent.type === 'message_delta' && claudeEvent.data.usage) {
-              totalUsage = claudeEvent.data.usage
-            }
-
-            isFirstChunk = false
+          // 提取使用统计 (usage is reported in message_delta per Claude API spec)
+          if (chunkData.type === 'message_delta' && chunkData.usage) {
+            totalUsage = chunkData.usage
           }
         }
       }
