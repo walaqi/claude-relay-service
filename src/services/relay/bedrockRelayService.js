@@ -39,7 +39,11 @@ class BedrockRelayService {
     }
 
     const clientConfig = {
-      region: targetRegion
+      region: targetRegion,
+      requestHandler: {
+        requestTimeout: config.requestTimeout || 600000, // 与其他 relay 服务保持一致
+        connectionTimeout: 10000
+      }
     }
 
     // 如果账户配置了特定的AWS凭证，使用它们
