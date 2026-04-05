@@ -20,9 +20,8 @@ class BedrockRelayService {
     this.defaultSmallModel =
       process.env.ANTHROPIC_SMALL_FAST_MODEL || 'us.anthropic.claude-3-5-haiku-20241022-v1:0'
 
-    // Token配置
-    this.maxOutputTokens = parseInt(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS) || 4096
-    this.maxThinkingTokens = parseInt(process.env.MAX_THINKING_TOKENS) || 1024
+    // Token配置 — 仅作为客户端未指定 max_tokens 时的回退默认值，不用于截断
+    this.maxOutputTokens = parseInt(process.env.BEDROCK_MAX_OUTPUT_TOKENS) || 128000
 
     // 创建Bedrock客户端
     this.clients = new Map() // 缓存不同区域的客户端
@@ -627,10 +626,8 @@ class BedrockRelayService {
 
   // 转换Claude格式请求到Bedrock格式
   _convertToBedrockFormat(requestBody) {
-    // 当启用 thinking 时，max_tokens 必须大于 budget_tokens，不能强制限制
-    const maxTokens = requestBody.thinking
-      ? requestBody.max_tokens || this.maxOutputTokens
-      : Math.min(requestBody.max_tokens || this.maxOutputTokens, this.maxOutputTokens)
+    // 透传客户端的 max_tokens，仅在未指定时使用默认值作为回退
+    const maxTokens = requestBody.max_tokens || this.maxOutputTokens
 
     // Bedrock 通过 Command 类型区分流式/非流式，payload 中不需要 stream 字段
     const bedrockPayload = {
