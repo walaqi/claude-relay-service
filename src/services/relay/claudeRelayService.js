@@ -195,9 +195,13 @@ class ClaudeRelayService {
   // Anthropic 对未开启 Extra Usage 的账户请求长上下文模型时返回此错误
   // 这不是真正的限流，不应标记账户为 rate limited
   _isExtraUsageRequired429(statusCode, body) {
-    if (statusCode !== 429) return false
+    if (statusCode !== 429) {
+      return false
+    }
     const message = this._extractErrorMessage(body)
-    if (!message) return false
+    if (!message) {
+      return false
+    }
     return message.toLowerCase().includes('extra usage')
   }
 
@@ -1123,7 +1127,7 @@ class ClaudeRelayService {
           content: [
             {
               type: 'text',
-              text: '[System Instructions - follow these strictly]\n' + originalSystemText.trim()
+              text: `[System Instructions - follow these strictly]\n${originalSystemText.trim()}`
             }
           ]
         }
