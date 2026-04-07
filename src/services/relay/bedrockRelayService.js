@@ -388,8 +388,13 @@ class BedrockRelayService {
         if (chunk.chunk) {
           const chunkData = JSON.parse(new TextDecoder().decode(chunk.chunk.bytes))
 
-          // 直接透传 Bedrock 事件到客户端（格式与 Claude SSE 一致）
+          // 透传 Bedrock 事件到客户端（格式与 Claude SSE 一致）
+          // 修正 message_start 中的模型名：Bedrock 格式 → 标准 Claude 格式
+          // 客户端依赖标准模型名判定上下文窗口，否则可能过早触发 "Context limit reached"
           if (chunkData.type) {
+            if (chunkData.type === 'message_start' && chunkData.message?.model) {
+              chunkData.message.model = this._mapFromBedrockModel(chunkData.message.model)
+            }
             res.write(`event: ${chunkData.type}\n`)
             res.write(`data: ${JSON.stringify(chunkData)}\n\n`)
           }
@@ -497,6 +502,30 @@ class BedrockRelayService {
     }
 
     return bedrockModel
+  }
+
+  // 将Bedrock模型名反向映射为标准Claude格式
+  // 客户端（如 Claude Code）依赖标准模型名来判定上下文窗口大小，
+  // 若收到 Bedrock 格式名称则可能使用保守默认值，导致过早触发 "Context limit reached"。
+  _mapFromBedrockModel(bedrockModelId) {
+    if (!bedrockModelId) {
+      return bedrockModelId
+    }
+
+    // 已经是标准格式，直接返回
+    if (!bedrockModelId.includes('.anthropic.') && !bedrockModelId.startsWith('anthropic.')) {
+      return bedrockModelId
+    }
+
+    // 从 Bedrock ID 中提取核心模型名
+    // 格式: {region}.anthropic.{model-name}-v{version}:{variant}
+    // 或:   anthropic.{model-name}-v{version}:{variant}
+    const match = bedrockModelId.match(/(?:.*\.)?anthropic\.(claude-.+?)(?:-v\d+)?(?::\d+)?$/)
+    if (match) {
+      return match[1]
+    }
+
+    return bedrockModelId
   }
 
   // 将标准Claude模型名映射为Bedrock格式
@@ -698,7 +727,7 @@ class BedrockRelayService {
       type: 'message',
       role: bedrockResponse.role || 'assistant',
       content: bedrockResponse.content || [],
-      model: bedrockResponse.model || this.defaultModel,
+      model: this._mapFromBedrockModel(bedrockResponse.model) || this.defaultModel,
       stop_reason: bedrockResponse.stop_reason || 'end_turn',
       stop_sequence: bedrockResponse.stop_sequence || null,
       usage: bedrockResponse.usage || {
