@@ -1098,6 +1098,73 @@
               </div>
             </div>
 
+            <!-- 请求明细采集 -->
+            <div
+              class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                  <div
+                    class="flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-lg"
+                  >
+                    <i class="fas fa-table text-xl"></i>
+                  </div>
+                  <div class="ml-4">
+                    <h4 class="text-lg font-semibold text-gray-900 dark:text-white">
+                      请求明细采集
+                    </h4>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      采集后台请求摘要，供“请求明细”标签页按时间、API Key、账户、模型和接口检索
+                    </p>
+                  </div>
+                </div>
+                <label class="relative inline-flex cursor-pointer items-center">
+                  <input
+                    v-model="claudeConfig.requestDetailCaptureEnabled"
+                    class="peer sr-only"
+                    type="checkbox"
+                    @change="saveClaudeConfig"
+                  />
+                  <div
+                    class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-cyan-500 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cyan-300 dark:border-gray-600 dark:bg-gray-700 dark:peer-focus:ring-cyan-800"
+                  ></div>
+                </label>
+              </div>
+
+              <div v-if="claudeConfig.requestDetailCaptureEnabled" class="mt-6 space-y-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    <i class="fas fa-calendar-day mr-2 text-gray-400"></i>
+                    请求明细保留天数
+                  </label>
+                  <input
+                    v-model.number="claudeConfig.requestDetailRetentionDays"
+                    class="mt-1 block w-full max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
+                    max="30"
+                    min="1"
+                    placeholder="7"
+                    type="number"
+                    @change="saveClaudeConfig"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    新请求明细会按天保留，支持 1-30 天；关闭采集不会删除已保留的数据，直到自然过期
+                  </p>
+                </div>
+              </div>
+
+              <div class="mt-4 rounded-lg bg-cyan-50 p-4 dark:bg-cyan-900/20">
+                <div class="flex">
+                  <i class="fas fa-shield-alt mt-0.5 text-cyan-500"></i>
+                  <div class="ml-3">
+                    <p class="text-sm text-cyan-700 dark:text-cyan-300">
+                      <strong>采集内容：</strong
+                      >仅保存脱敏且截断后的请求快照、Token、费用、耗时和缓存指标，不保存完整原始提示词正文。
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- 配置更新信息 -->
             <div
               v-if="claudeConfig.updatedAt"
@@ -1930,6 +1997,8 @@ const claudeConfig = ref({
   concurrentRequestQueueMaxSize: 3,
   concurrentRequestQueueMaxSizeMultiplier: 0,
   concurrentRequestQueueTimeoutMs: 10000,
+  requestDetailCaptureEnabled: false,
+  requestDetailRetentionDays: 7,
   updatedAt: null,
   updatedBy: null
 })
@@ -2230,6 +2299,8 @@ const loadClaudeConfig = async () => {
         concurrentRequestQueueMaxSizeMultiplier:
           response.config?.concurrentRequestQueueMaxSizeMultiplier ?? 0,
         concurrentRequestQueueTimeoutMs: response.config?.concurrentRequestQueueTimeoutMs ?? 10000,
+        requestDetailCaptureEnabled: response.config?.requestDetailCaptureEnabled ?? false,
+        requestDetailRetentionDays: response.config?.requestDetailRetentionDays ?? 7,
         updatedAt: response.config?.updatedAt || null,
         updatedBy: response.config?.updatedBy || null
       }
@@ -2262,7 +2333,9 @@ const saveClaudeConfig = async () => {
       concurrentRequestQueueMaxSize: claudeConfig.value.concurrentRequestQueueMaxSize,
       concurrentRequestQueueMaxSizeMultiplier:
         claudeConfig.value.concurrentRequestQueueMaxSizeMultiplier,
-      concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs
+      concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs,
+      requestDetailCaptureEnabled: claudeConfig.value.requestDetailCaptureEnabled,
+      requestDetailRetentionDays: claudeConfig.value.requestDetailRetentionDays
     }
 
     const response = await httpApis.updateClaudeRelayConfigApi(payload, {

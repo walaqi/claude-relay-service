@@ -49,6 +49,10 @@ export const getTempUnavailableApi = () =>
 export const getUsageCostsApi = (period) =>
   request({ url: `/admin/usage-costs?period=${period}`, method: 'GET' })
 export const getUsageStatsApi = (url) => request({ url, method: 'GET' })
+export const getRequestDetailsApi = (params) =>
+  request({ url: '/admin/request-details', method: 'GET', params })
+export const getRequestDetailApi = (requestId) =>
+  request({ url: `/admin/request-details/${requestId}`, method: 'GET' })
 
 // 客户端
 export const getSupportedClientsApi = () =>

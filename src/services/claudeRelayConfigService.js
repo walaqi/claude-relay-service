@@ -27,6 +27,8 @@ const DEFAULT_CONFIG = {
   concurrentRequestQueueMaxSizeMultiplier: 0, // 并发数的倍数（默认0，仅使用固定值）
   concurrentRequestQueueTimeoutMs: 10000, // 排队超时（毫秒，默认10秒）
   concurrentRequestQueueMaxRedisFailCount: 5, // 连续 Redis 失败阈值（默认5次）
+  requestDetailCaptureEnabled: false, // 是否启用请求明细采集
+  requestDetailRetentionDays: 7, // 请求明细保留天数
   // 排队健康检查配置
   concurrentRequestQueueHealthCheckEnabled: true, // 是否启用排队健康检查（默认开启）
   concurrentRequestQueueHealthThreshold: 0.8, // 健康检查阈值（P90 >= 超时 × 阈值时拒绝新请求）
