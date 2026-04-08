@@ -1135,19 +1135,58 @@
                 <div>
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     <i class="fas fa-calendar-day mr-2 text-gray-400"></i>
-                    请求明细保留天数
+                    请求明细保留时间
                   </label>
-                  <input
-                    v-model.number="claudeConfig.requestDetailRetentionDays"
-                    class="mt-1 block w-full max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
-                    max="30"
-                    min="1"
-                    placeholder="7"
-                    type="number"
-                    @change="saveClaudeConfig"
-                  />
+                  <div class="mt-1 flex max-w-md flex-col gap-3 sm:flex-row sm:items-end">
+                    <div class="flex-1">
+                      <label
+                        class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"
+                      >
+                        天
+                      </label>
+                      <input
+                        v-model.number="requestDetailRetentionInput.days"
+                        class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
+                        max="30"
+                        min="0"
+                        placeholder="0"
+                        type="number"
+                        @change="handleRequestDetailRetentionChange"
+                      />
+                    </div>
+                    <div class="flex-1">
+                      <label
+                        class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"
+                      >
+                        小时
+                      </label>
+                      <input
+                        v-model.number="requestDetailRetentionInput.hours"
+                        class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
+                        max="23"
+                        min="0"
+                        placeholder="6"
+                        type="number"
+                        @change="handleRequestDetailRetentionChange"
+                      />
+                    </div>
+                  </div>
+                  <p
+                    v-if="requestDetailRetentionError"
+                    class="mt-2 text-xs text-red-500 dark:text-red-400"
+                  >
+                    {{ requestDetailRetentionError }}
+                  </p>
+                  <p
+                    v-else-if="requestDetailRetentionWarning"
+                    class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+                  >
+                    <i class="fas fa-exclamation-triangle mr-1"></i>
+                    {{ requestDetailRetentionWarning }}
+                  </p>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    新请求明细会按天保留，支持 1-30 天；关闭采集不会删除已保留的数据，直到自然过期
+                    新请求明细按小时保留，支持 0-30 天与 0-23 小时组合，总保留时间为 1-720
+                    小时；关闭采集不会删除已保留的数据，直到自然过期
                   </p>
                 </div>
               </div>
@@ -1884,7 +1923,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { showToast } from '@/utils/tools'
 import { useSettingsStore } from '@/stores/settings'
@@ -1998,10 +2037,90 @@ const claudeConfig = ref({
   concurrentRequestQueueMaxSizeMultiplier: 0,
   concurrentRequestQueueTimeoutMs: 10000,
   requestDetailCaptureEnabled: false,
-  requestDetailRetentionDays: 7,
+  requestDetailRetentionHours: 6,
   updatedAt: null,
   updatedBy: null
 })
+
+const REQUEST_DETAIL_RETENTION_DEFAULT_HOURS = 6
+const REQUEST_DETAIL_RETENTION_WARNING_HOURS = 72
+const REQUEST_DETAIL_RETENTION_MAX_HOURS = 720
+
+const requestDetailRetentionInput = reactive({
+  days: 0,
+  hours: REQUEST_DETAIL_RETENTION_DEFAULT_HOURS
+})
+
+const normalizeRetentionPart = (value) => {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const splitRequestDetailRetentionHours = (totalHours = REQUEST_DETAIL_RETENTION_DEFAULT_HOURS) => {
+  const normalized = Math.max(
+    1,
+    Math.min(REQUEST_DETAIL_RETENTION_MAX_HOURS, normalizeRetentionPart(totalHours))
+  )
+  return {
+    days: Math.floor(normalized / 24),
+    hours: normalized % 24
+  }
+}
+
+const syncRequestDetailRetentionInput = (totalHours = REQUEST_DETAIL_RETENTION_DEFAULT_HOURS) => {
+  const { days, hours } = splitRequestDetailRetentionHours(totalHours)
+  requestDetailRetentionInput.days = days
+  requestDetailRetentionInput.hours = hours
+}
+
+const requestDetailRetentionTotalHours = computed(() => {
+  const days = normalizeRetentionPart(requestDetailRetentionInput.days)
+  const hours = normalizeRetentionPart(requestDetailRetentionInput.hours)
+  return days * 24 + hours
+})
+
+const requestDetailRetentionError = computed(() => {
+  const days = normalizeRetentionPart(requestDetailRetentionInput.days)
+  const hours = normalizeRetentionPart(requestDetailRetentionInput.hours)
+
+  if (days < 0 || days > 30) {
+    return '天数必须在 0 到 30 之间'
+  }
+
+  if (hours < 0 || hours > 23) {
+    return '小时数必须在 0 到 23 之间'
+  }
+
+  if (requestDetailRetentionTotalHours.value < 1) {
+    return '请求明细保留时间至少需要 1 小时'
+  }
+
+  if (requestDetailRetentionTotalHours.value > REQUEST_DETAIL_RETENTION_MAX_HOURS) {
+    return '请求明细保留时间不能超过 30 天'
+  }
+
+  return ''
+})
+
+const requestDetailRetentionWarning = computed(() => {
+  if (
+    !requestDetailRetentionError.value &&
+    requestDetailRetentionTotalHours.value > REQUEST_DETAIL_RETENTION_WARNING_HOURS
+  ) {
+    return '保留时间超过 72 小时会增加 Redis 存储压力'
+  }
+  return ''
+})
+
+const handleRequestDetailRetentionChange = () => {
+  if (requestDetailRetentionError.value) {
+    showToast(requestDetailRetentionError.value, 'error')
+    return
+  }
+
+  claudeConfig.value.requestDetailRetentionHours = requestDetailRetentionTotalHours.value
+  saveClaudeConfig()
+}
 
 // 服务倍率配置
 const serviceRatesLoading = ref(false)
@@ -2300,10 +2419,12 @@ const loadClaudeConfig = async () => {
           response.config?.concurrentRequestQueueMaxSizeMultiplier ?? 0,
         concurrentRequestQueueTimeoutMs: response.config?.concurrentRequestQueueTimeoutMs ?? 10000,
         requestDetailCaptureEnabled: response.config?.requestDetailCaptureEnabled ?? false,
-        requestDetailRetentionDays: response.config?.requestDetailRetentionDays ?? 7,
+        requestDetailRetentionHours:
+          response.config?.requestDetailRetentionHours ?? REQUEST_DETAIL_RETENTION_DEFAULT_HOURS,
         updatedAt: response.config?.updatedAt || null,
         updatedBy: response.config?.updatedBy || null
       }
+      syncRequestDetailRetentionInput(claudeConfig.value.requestDetailRetentionHours)
     }
   } catch (error) {
     if (error.name === 'AbortError') return
@@ -2335,7 +2456,7 @@ const saveClaudeConfig = async () => {
         claudeConfig.value.concurrentRequestQueueMaxSizeMultiplier,
       concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs,
       requestDetailCaptureEnabled: claudeConfig.value.requestDetailCaptureEnabled,
-      requestDetailRetentionDays: claudeConfig.value.requestDetailRetentionDays
+      requestDetailRetentionHours: claudeConfig.value.requestDetailRetentionHours
     }
 
     const response = await httpApis.updateClaudeRelayConfigApi(payload, {
@@ -2344,9 +2465,13 @@ const saveClaudeConfig = async () => {
     if (response.success && isMounted.value) {
       claudeConfig.value = {
         ...claudeConfig.value,
+        requestDetailRetentionHours:
+          response.config?.requestDetailRetentionHours ??
+          claudeConfig.value.requestDetailRetentionHours,
         updatedAt: response.config?.updatedAt || new Date().toISOString(),
         updatedBy: response.config?.updatedBy || null
       }
+      syncRequestDetailRetentionInput(claudeConfig.value.requestDetailRetentionHours)
       showToast('Claude 转发配置已保存', 'success')
     }
   } catch (error) {

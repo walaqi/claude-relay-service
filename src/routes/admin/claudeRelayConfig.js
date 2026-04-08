@@ -49,7 +49,7 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       concurrentRequestQueueMaxSizeMultiplier,
       concurrentRequestQueueTimeoutMs,
       requestDetailCaptureEnabled,
-      requestDetailRetentionDays
+      requestDetailRetentionHours
     } = req.body
 
     // 验证输入
@@ -171,15 +171,15 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       return res.status(400).json({ error: 'requestDetailCaptureEnabled must be a boolean' })
     }
 
-    if (requestDetailRetentionDays !== undefined) {
+    if (requestDetailRetentionHours !== undefined) {
       if (
-        typeof requestDetailRetentionDays !== 'number' ||
-        !Number.isInteger(requestDetailRetentionDays) ||
-        requestDetailRetentionDays < 1 ||
-        requestDetailRetentionDays > 30
+        typeof requestDetailRetentionHours !== 'number' ||
+        !Number.isInteger(requestDetailRetentionHours) ||
+        requestDetailRetentionHours < 1 ||
+        requestDetailRetentionHours > 720
       ) {
         return res.status(400).json({
-          error: 'requestDetailRetentionDays must be an integer between 1 and 30'
+          error: 'requestDetailRetentionHours must be an integer between 1 and 720'
         })
       }
     }
@@ -221,8 +221,8 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     if (requestDetailCaptureEnabled !== undefined) {
       updateData.requestDetailCaptureEnabled = requestDetailCaptureEnabled
     }
-    if (requestDetailRetentionDays !== undefined) {
-      updateData.requestDetailRetentionDays = requestDetailRetentionDays
+    if (requestDetailRetentionHours !== undefined) {
+      updateData.requestDetailRetentionHours = requestDetailRetentionHours
     }
 
     const updatedConfig = await claudeRelayConfigService.updateConfig(

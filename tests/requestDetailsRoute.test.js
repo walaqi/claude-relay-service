@@ -66,7 +66,7 @@ describe('requestDetails admin routes', () => {
   test('returns retained detail records even when capture is disabled', async () => {
     requestDetailService.getRequestDetail.mockResolvedValue({
       captureEnabled: false,
-      retentionDays: 7,
+      retentionHours: 6,
       record: {
         requestId: 'req_1',
         model: 'gpt-5.4'

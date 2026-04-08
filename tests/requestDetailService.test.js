@@ -35,6 +35,11 @@ const requestDetailService = require('../src/services/requestDetailService')
 describe('requestDetailService', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    jest.useFakeTimers().setSystemTime(Date.parse('2026-04-07T18:00:00.000Z'))
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
   })
 
   test('captureRequestDetail stores normalized request detail records when enabled', async () => {
@@ -48,7 +53,7 @@ describe('requestDetailService', () => {
 
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionDays: 7
+      requestDetailRetentionHours: 6
     })
     redis.getClient.mockReturnValue({ multi: jest.fn(() => multi) })
 
@@ -79,6 +84,12 @@ describe('requestDetailService', () => {
 
     expect(result).toEqual({ captured: true, requestId: 'req_capture_1' })
     expect(multi.set).toHaveBeenCalled()
+    expect(multi.set).toHaveBeenCalledWith(
+      'request_detail:item:req_capture_1',
+      expect.any(String),
+      'EX',
+      21600
+    )
     const storedPayload = JSON.parse(multi.set.mock.calls[0][1])
     expect(storedPayload.requestBodySnapshot.apiKey).toContain('***')
     expect(storedPayload.endpoint).toBe('/openai/v1/responses')
@@ -91,7 +102,7 @@ describe('requestDetailService', () => {
   test('listRequestDetails applies openai cache display flags and openai hit-rate formula', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionDays: 7
+      requestDetailRetentionHours: 6
     })
 
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })
@@ -137,6 +148,7 @@ describe('requestDetailService', () => {
     expect(result.records[0].requestBodySnapshot).toBeUndefined()
     expect(result.records[0].isOpenAIRelated).toBe(true)
     expect(result.records[0].cacheCreateNotApplicable).toBe(true)
+    expect(result.retentionHours).toBe(6)
     expect(result.summary.totalRequests).toBe(1)
     expect(result.summary.cacheCreateTokens).toBe(0)
     expect(result.summary.cacheCreateNotApplicable).toBe(true)
@@ -148,7 +160,7 @@ describe('requestDetailService', () => {
   test('listRequestDetails aggregates mixed openai and non-openai cache metrics correctly', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionDays: 7
+      requestDetailRetentionHours: 6
     })
 
     redis.getApiKey.mockImplementation(async (keyId) => ({ name: `Key ${keyId}` }))
@@ -219,7 +231,7 @@ describe('requestDetailService', () => {
   test('listRequestDetails still exposes retained data when capture is disabled', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: false,
-      requestDetailRetentionDays: 7
+      requestDetailRetentionHours: 6
     })
 
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })
@@ -254,6 +266,7 @@ describe('requestDetailService', () => {
     })
 
     expect(result.captureEnabled).toBe(false)
+    expect(result.retentionHours).toBe(6)
     expect(result.records).toHaveLength(1)
     expect(result.records[0].apiKeyName).toBe('Primary Key')
   })
@@ -261,7 +274,7 @@ describe('requestDetailService', () => {
   test('listRequestDetails derives reasoning from legacy preview-only records', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionDays: 7
+      requestDetailRetentionHours: 6
     })
 
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })

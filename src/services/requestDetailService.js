@@ -20,8 +20,8 @@ const {
 
 const REQUEST_DETAIL_ITEM_PREFIX = 'request_detail:item:'
 const REQUEST_DETAIL_DAY_INDEX_PREFIX = 'request_detail:index:day:'
-const DEFAULT_RETENTION_DAYS = 7
-const MAX_RETENTION_DAYS = 30
+const DEFAULT_RETENTION_HOURS = 6
+const MAX_RETENTION_HOURS = 30 * 24
 const REQUEST_DETAIL_QUERY_BATCH_SIZE = 200
 
 const accountTypeNames = {
@@ -52,12 +52,12 @@ const accountServices = {
   bedrock: bedrockAccountService
 }
 
-function clampRetentionDays(value) {
+function clampRetentionHours(value) {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed)) {
-    return DEFAULT_RETENTION_DAYS
+    return DEFAULT_RETENTION_HOURS
   }
-  return Math.min(Math.max(parsed, 1), MAX_RETENTION_DAYS)
+  return Math.min(Math.max(parsed, 1), MAX_RETENTION_HOURS)
 }
 
 function normalizeNumber(value, digits = null) {
@@ -266,14 +266,14 @@ class RequestDetailService {
     const config = await claudeRelayConfigService.getConfig()
     return {
       captureEnabled: config.requestDetailCaptureEnabled === true,
-      retentionDays: clampRetentionDays(config.requestDetailRetentionDays)
+      retentionHours: clampRetentionHours(config.requestDetailRetentionHours)
     }
   }
 
   _emptyListResult(settings, filters = {}) {
     return {
       captureEnabled: settings.captureEnabled,
-      retentionDays: settings.retentionDays,
+      retentionHours: settings.retentionHours,
       records: [],
       pagination: {
         currentPage: 1,
@@ -380,7 +380,7 @@ class RequestDetailService {
       const timestampMs = toMillis(normalized.timestamp) || Date.now()
       const itemKey = `${REQUEST_DETAIL_ITEM_PREFIX}${requestId}`
       const dayKey = `${REQUEST_DETAIL_DAY_INDEX_PREFIX}${formatDayKey(new Date(timestampMs))}`
-      const ttlSeconds = Math.max(3600, settings.retentionDays * 86400)
+      const ttlSeconds = Math.max(3600, settings.retentionHours * 3600)
       const indexTtlSeconds = ttlSeconds + 86400
 
       await client
@@ -558,7 +558,7 @@ class RequestDetailService {
     const emptyResult = this._emptyListResult(settings, filters)
 
     const now = new Date()
-    const retentionStart = new Date(now.getTime() - settings.retentionDays * 86400 * 1000)
+    const retentionStart = new Date(now.getTime() - settings.retentionHours * 3600 * 1000)
     const startDate = filters.startDate ? new Date(filters.startDate) : retentionStart
     const endDate = filters.endDate ? new Date(filters.endDate) : now
 
@@ -582,7 +582,7 @@ class RequestDetailService {
       return {
         ...emptyResult,
         captureEnabled: settings.captureEnabled,
-        retentionDays: settings.retentionDays,
+        retentionHours: settings.retentionHours,
         filters: {
           ...emptyResult.filters,
           startDate: effectiveStart.toISOString(),
@@ -674,7 +674,7 @@ class RequestDetailService {
 
     return {
       captureEnabled: settings.captureEnabled,
-      retentionDays: settings.retentionDays,
+      retentionHours: settings.retentionHours,
       records: pageRecords,
       pagination: {
         currentPage: totalPages > 0 ? Math.min(page, totalPages) : 1,
@@ -706,7 +706,7 @@ class RequestDetailService {
     if (!client) {
       return {
         captureEnabled: settings.captureEnabled,
-        retentionDays: settings.retentionDays,
+        retentionHours: settings.retentionHours,
         record: null
       }
     }
@@ -716,7 +716,7 @@ class RequestDetailService {
     if (!parsed) {
       return {
         captureEnabled: settings.captureEnabled,
-        retentionDays: settings.retentionDays,
+        retentionHours: settings.retentionHours,
         record: null
       }
     }
@@ -724,7 +724,7 @@ class RequestDetailService {
     const [enrichedRecord] = await this._enrichRecords([parsed])
     return {
       captureEnabled: settings.captureEnabled,
-      retentionDays: settings.retentionDays,
+      retentionHours: settings.retentionHours,
       record: enrichedRecord || null
     }
   }

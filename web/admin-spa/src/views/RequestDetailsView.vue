@@ -28,7 +28,7 @@
                 class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
               >
                 <span class="mr-2 h-2 w-2 rounded-full bg-blue-500" />
-                保留 {{ retentionDays }} 天
+                {{ formatRetentionHours(retentionHours) }}
               </span>
             </div>
             <p class="mt-1 text-sm text-gray-600 dark:text-gray-400 sm:text-base">
@@ -550,7 +550,7 @@ const exporting = ref(false)
 const detailVisible = ref(false)
 const activeRequestId = ref('')
 const captureEnabled = ref(false)
-const retentionDays = ref(7)
+const retentionHours = ref(6)
 const records = ref([])
 const availableApiKeys = ref([])
 const availableAccounts = ref([])
@@ -620,7 +620,7 @@ const buildParams = (page) => {
 
 const syncResponseState = (data) => {
   captureEnabled.value = data.captureEnabled === true
-  retentionDays.value = data.retentionDays || 7
+  retentionHours.value = data.retentionHours || 6
   records.value = data.records || []
 
   const pageInfo = data.pagination || {}
@@ -804,6 +804,23 @@ const formatCost = (value) => {
 }
 const formatCacheCreate = (value, notApplicable = false) =>
   notApplicable ? '-' : formatNumber(value)
+const formatRetentionHours = (value) => {
+  const totalHours = Number(value || 0)
+  if (totalHours <= 0) return '保留 6 小时'
+
+  const days = Math.floor(totalHours / 24)
+  const hours = totalHours % 24
+
+  if (days > 0 && hours > 0) {
+    return `保留 ${days} 天 ${hours} 小时`
+  }
+
+  if (days > 0) {
+    return `保留 ${days} 天`
+  }
+
+  return `保留 ${hours} 小时`
+}
 const formatDuration = (value) => `${Number(value || 0)}ms`
 const formatPercent = (value) => `${Number(value || 0).toFixed(2)}%`
 const formatReasoning = (value) => value || '-'
