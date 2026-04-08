@@ -30,6 +30,23 @@ router.get('/request-details', authenticateAdmin, async (req, res) => {
   }
 })
 
+router.get('/request-details/body-preview-stats', authenticateAdmin, async (_req, res) => {
+  try {
+    const data = await requestDetailService.getRequestBodyPreviewStats()
+    return res.json({
+      success: true,
+      data
+    })
+  } catch (error) {
+    logger.error('❌ Failed to get request body preview stats:', error)
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get request body preview stats',
+      message: error.message
+    })
+  }
+})
+
 router.get('/request-details/:requestId', authenticateAdmin, async (req, res) => {
   try {
     const { requestId } = req.params

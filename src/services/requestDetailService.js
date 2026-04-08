@@ -23,6 +23,7 @@ const REQUEST_DETAIL_DAY_INDEX_PREFIX = 'request_detail:index:day:'
 const DEFAULT_RETENTION_HOURS = 6
 const MAX_RETENTION_HOURS = 30 * 24
 const REQUEST_DETAIL_QUERY_BATCH_SIZE = 200
+const REQUEST_DETAIL_SCAN_BATCH_SIZE = 200
 
 const accountTypeNames = {
   claude: 'Claude官方',
@@ -266,7 +267,8 @@ class RequestDetailService {
     const config = await claudeRelayConfigService.getConfig()
     return {
       captureEnabled: config.requestDetailCaptureEnabled === true,
-      retentionHours: clampRetentionHours(config.requestDetailRetentionHours)
+      retentionHours: clampRetentionHours(config.requestDetailRetentionHours),
+      bodyPreviewEnabled: config.requestDetailBodyPreviewEnabled === true
     }
   }
 
@@ -274,6 +276,7 @@ class RequestDetailService {
     return {
       captureEnabled: settings.captureEnabled,
       retentionHours: settings.retentionHours,
+      bodyPreviewEnabled: settings.bodyPreviewEnabled,
       records: [],
       pagination: {
         currentPage: 1,
@@ -318,7 +321,8 @@ class RequestDetailService {
     }
   }
 
-  _normalizeRecord(detail, requestId) {
+  _normalizeRecord(detail, requestId, options = {}) {
+    const requestBodySource = detail.requestBodySnapshot ?? detail.requestBody
     const timestamp = toIsoString(detail.timestamp) || new Date().toISOString()
     const durationMs = normalizeNumber(detail.durationMs)
     const inputTokens = normalizeNumber(detail.inputTokens)
@@ -330,11 +334,8 @@ class RequestDetailService {
     const statusCode = normalizeNumber(detail.statusCode)
     const cost = normalizeNumber(detail.cost, 6)
     const realCost = normalizeNumber(detail.realCost, 6)
-    const reasoningInfo = extractRequestReasoningInfo(
-      detail.requestBodySnapshot ?? detail.requestBody
-    )
-
-    return {
+    const reasoningInfo = extractRequestReasoningInfo(requestBodySource)
+    const normalized = {
       requestId,
       timestamp,
       requestStartedAt: toIsoString(detail.requestStartedAt),
@@ -357,10 +358,15 @@ class RequestDetailService {
       realCostBreakdown: detail.realCostBreakdown || null,
       durationMs,
       isLongContextRequest: detail.isLongContextRequest === true,
-      requestBodySnapshot: sanitizeRequestBodySnapshot(detail.requestBodySnapshot ?? detail.requestBody),
       reasoningDisplay: detail.reasoningDisplay || reasoningInfo.reasoningDisplay || null,
       reasoningSource: detail.reasoningSource || reasoningInfo.reasoningSource || null
     }
+
+    if (options.bodyPreviewEnabled && requestBodySource !== undefined) {
+      normalized.requestBodySnapshot = sanitizeRequestBodySnapshot(requestBodySource)
+    }
+
+    return normalized
   }
 
   async captureRequestDetail(detail = {}) {
@@ -376,7 +382,9 @@ class RequestDetailService {
       }
 
       const requestId = detail.requestId || makeRequestDetailId()
-      const normalized = this._normalizeRecord(detail, requestId)
+      const normalized = this._normalizeRecord(detail, requestId, {
+        bodyPreviewEnabled: settings.bodyPreviewEnabled
+      })
       const timestampMs = toMillis(normalized.timestamp) || Date.now()
       const itemKey = `${REQUEST_DETAIL_ITEM_PREFIX}${requestId}`
       const dayKey = `${REQUEST_DETAIL_DAY_INDEX_PREFIX}${formatDayKey(new Date(timestampMs))}`
@@ -434,6 +442,89 @@ class RequestDetailService {
       requestId,
       timestampMs
     }))
+  }
+
+  async _scanRequestDetailItemKeys(visitor) {
+    const client = redis.getClient()
+    if (!client) {
+      return
+    }
+
+    let cursor = '0'
+    do {
+      const [nextCursor, keys] = await client.scan(
+        cursor,
+        'MATCH',
+        `${REQUEST_DETAIL_ITEM_PREFIX}*`,
+        'COUNT',
+        REQUEST_DETAIL_SCAN_BATCH_SIZE
+      )
+      cursor = nextCursor
+      if (Array.isArray(keys) && keys.length > 0) {
+        await visitor(keys, client)
+      }
+    } while (cursor !== '0')
+  }
+
+  async getRequestBodyPreviewStats() {
+    const settings = await this.getSettings()
+    let snapshotCount = 0
+
+    await this._scanRequestDetailItemKeys(async (keys, client) => {
+      const rawItems = await client.mget(keys)
+      for (const rawItem of rawItems) {
+        const parsed = safeJsonParse(rawItem)
+        if (
+          parsed &&
+          Object.prototype.hasOwnProperty.call(parsed, 'requestBodySnapshot') &&
+          parsed.requestBodySnapshot !== undefined
+        ) {
+          snapshotCount += 1
+        }
+      }
+    })
+
+    return {
+      captureEnabled: settings.captureEnabled,
+      retentionHours: settings.retentionHours,
+      bodyPreviewEnabled: settings.bodyPreviewEnabled,
+      snapshotCount,
+      hasSnapshots: snapshotCount > 0
+    }
+  }
+
+  async purgeRequestBodySnapshots() {
+    let updatedRecords = 0
+
+    await this._scanRequestDetailItemKeys(async (keys, client) => {
+      const rawItems = await client.mget(keys)
+      const pipeline = typeof client.pipeline === 'function' ? client.pipeline() : client.multi()
+      let hasMutations = false
+
+      rawItems.forEach((rawItem, index) => {
+        const parsed = safeJsonParse(rawItem)
+        if (
+          !parsed ||
+          !Object.prototype.hasOwnProperty.call(parsed, 'requestBodySnapshot') ||
+          parsed.requestBodySnapshot === undefined
+        ) {
+          return
+        }
+
+        delete parsed.requestBodySnapshot
+        pipeline.set(keys[index], JSON.stringify(parsed), 'KEEPTTL')
+        hasMutations = true
+        updatedRecords += 1
+      })
+
+      if (hasMutations) {
+        await pipeline.exec()
+      }
+    })
+
+    return {
+      updatedRecords
+    }
   }
 
   async _getApiKeyName(keyId, cache) {
@@ -583,6 +674,7 @@ class RequestDetailService {
         ...emptyResult,
         captureEnabled: settings.captureEnabled,
         retentionHours: settings.retentionHours,
+        bodyPreviewEnabled: settings.bodyPreviewEnabled,
         filters: {
           ...emptyResult.filters,
           startDate: effectiveStart.toISOString(),
@@ -675,6 +767,7 @@ class RequestDetailService {
     return {
       captureEnabled: settings.captureEnabled,
       retentionHours: settings.retentionHours,
+      bodyPreviewEnabled: settings.bodyPreviewEnabled,
       records: pageRecords,
       pagination: {
         currentPage: totalPages > 0 ? Math.min(page, totalPages) : 1,
@@ -707,6 +800,7 @@ class RequestDetailService {
       return {
         captureEnabled: settings.captureEnabled,
         retentionHours: settings.retentionHours,
+        bodyPreviewEnabled: settings.bodyPreviewEnabled,
         record: null
       }
     }
@@ -717,6 +811,7 @@ class RequestDetailService {
       return {
         captureEnabled: settings.captureEnabled,
         retentionHours: settings.retentionHours,
+        bodyPreviewEnabled: settings.bodyPreviewEnabled,
         record: null
       }
     }
@@ -725,6 +820,7 @@ class RequestDetailService {
     return {
       captureEnabled: settings.captureEnabled,
       retentionHours: settings.retentionHours,
+      bodyPreviewEnabled: settings.bodyPreviewEnabled,
       record: enrichedRecord || null
     }
   }

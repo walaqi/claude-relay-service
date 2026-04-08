@@ -175,10 +175,22 @@
         >
           <div class="mb-3 flex items-center justify-between gap-3">
             <h4 class="section-title mb-0">Request Body 快照</h4>
-            <el-button size="small" @click="copySnapshot">复制 JSON</el-button>
+            <el-button
+              v-if="bodyPreviewEnabled && detail.requestBodySnapshot"
+              size="small"
+              @click="copySnapshot"
+            >
+              复制 JSON
+            </el-button>
           </div>
-          <div v-if="detail.requestBodySnapshot" class="snapshot-panel">
+          <div v-if="bodyPreviewEnabled && detail.requestBodySnapshot" class="snapshot-panel">
             <pre>{{ formattedSnapshot }}</pre>
+          </div>
+          <div
+            v-else-if="!bodyPreviewEnabled"
+            class="rounded-lg border border-dashed border-amber-300 bg-amber-50/70 px-4 py-6 text-sm text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300"
+          >
+            请求体预览已关闭，当前仅保留请求摘要字段，不展示请求体快照。
           </div>
           <div
             v-else
@@ -213,6 +225,7 @@ const emit = defineEmits(['close'])
 
 const loading = ref(false)
 const detail = ref(null)
+const bodyPreviewEnabled = ref(false)
 
 const costBreakdown = computed(() => {
   const breakdown = detail.value?.realCostBreakdown || detail.value?.costBreakdown || {}
@@ -366,9 +379,11 @@ const fetchDetail = async () => {
       showToast(response.message || '加载请求详情失败', 'error')
       return
     }
+    bodyPreviewEnabled.value = response.data?.bodyPreviewEnabled === true
     detail.value = response.data?.record || null
   } catch (error) {
     detail.value = null
+    bodyPreviewEnabled.value = false
     showToast(`加载请求详情失败：${error.message || '未知错误'}`, 'error')
   } finally {
     loading.value = false
@@ -416,6 +431,16 @@ watch(
     fetchDetail()
   },
   { immediate: true }
+)
+
+watch(
+  () => props.show,
+  (visible) => {
+    if (!visible) {
+      detail.value = null
+      bodyPreviewEnabled.value = false
+    }
+  }
 )
 </script>
 

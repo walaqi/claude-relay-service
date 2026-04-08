@@ -1189,6 +1189,41 @@
                     小时；关闭采集不会删除已保留的数据，直到自然过期
                   </p>
                 </div>
+
+                <div
+                  class="rounded-lg border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-700 dark:bg-gray-900/30"
+                >
+                  <div class="flex items-start justify-between gap-4">
+                    <div class="flex-1">
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        <i class="fas fa-eye mr-2 text-gray-400"></i>
+                        请求体预览
+                      </label>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        关闭后，请求明细详情页不再展示请求体预览，Redis 也不会继续保存请求体快照。
+                      </p>
+                      <p
+                        v-if="claudeConfig.requestDetailBodyPreviewEnabled"
+                        class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+                      >
+                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                        开启请求体预览会增加 Redis 存储压力
+                      </p>
+                    </div>
+
+                    <label class="relative inline-flex cursor-pointer items-center">
+                      <input
+                        v-model="claudeConfig.requestDetailBodyPreviewEnabled"
+                        class="peer sr-only"
+                        type="checkbox"
+                        @change="handleRequestDetailBodyPreviewToggle"
+                      />
+                      <div
+                        class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-cyan-500 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cyan-300 dark:border-gray-600 dark:bg-gray-700 dark:peer-focus:ring-cyan-800"
+                      ></div>
+                    </label>
+                  </div>
+                </div>
               </div>
 
               <div class="mt-4 rounded-lg bg-cyan-50 p-4 dark:bg-cyan-900/20">
@@ -1196,8 +1231,12 @@
                   <i class="fas fa-shield-alt mt-0.5 text-cyan-500"></i>
                   <div class="ml-3">
                     <p class="text-sm text-cyan-700 dark:text-cyan-300">
-                      <strong>采集内容：</strong
-                      >仅保存脱敏且截断后的请求快照、Token、费用、耗时和缓存指标，不保存完整原始提示词正文。
+                      <strong>采集内容：</strong>
+                      {{
+                        claudeConfig.requestDetailBodyPreviewEnabled
+                          ? '保存脱敏且截断后的请求体预览，以及 Token、费用、耗时和缓存指标，不保存完整原始提示词正文。'
+                          : '仅保存请求摘要字段、Token、费用、耗时和缓存指标，不保存请求体预览与完整原始提示词正文。'
+                      }}
                     </p>
                   </div>
                 </div>
@@ -2038,6 +2077,7 @@ const claudeConfig = ref({
   concurrentRequestQueueTimeoutMs: 10000,
   requestDetailCaptureEnabled: false,
   requestDetailRetentionHours: 6,
+  requestDetailBodyPreviewEnabled: false,
   updatedAt: null,
   updatedBy: null
 })
@@ -2120,6 +2160,59 @@ const handleRequestDetailRetentionChange = () => {
 
   claudeConfig.value.requestDetailRetentionHours = requestDetailRetentionTotalHours.value
   saveClaudeConfig()
+}
+
+const handleRequestDetailBodyPreviewToggle = async () => {
+  const nextValue = claudeConfig.value.requestDetailBodyPreviewEnabled === true
+
+  if (nextValue) {
+    await saveClaudeConfig()
+    return
+  }
+
+  let shouldPurgeSnapshots = false
+
+  try {
+    const statsResponse = await httpApis.getRequestDetailBodyPreviewStatsApi({
+      signal: abortController.value.signal
+    })
+
+    if (statsResponse?.success === false) {
+      claudeConfig.value.requestDetailBodyPreviewEnabled = true
+      showToast(statsResponse.message || '检查历史请求体预览失败', 'error')
+      return
+    }
+
+    const snapshotCount = Number(statsResponse?.data?.snapshotCount || 0)
+    if (snapshotCount > 0) {
+      const confirmed = await showConfirm(
+        '关闭请求体预览',
+        `检测到当前仍有 ${snapshotCount} 条请求明细保存了请求体预览。\n关闭后会移除这些历史请求体预览，且后续新请求也不再保存预览。\n\n是否继续？`,
+        '确认关闭',
+        '取消',
+        'danger'
+      )
+
+      if (!confirmed) {
+        claudeConfig.value.requestDetailBodyPreviewEnabled = true
+        return
+      }
+
+      shouldPurgeSnapshots = true
+    }
+
+    const response = await saveClaudeConfig({
+      purgeRequestDetailBodySnapshots: shouldPurgeSnapshots
+    })
+    if (response?.success === false) {
+      claudeConfig.value.requestDetailBodyPreviewEnabled = true
+    }
+  } catch (error) {
+    claudeConfig.value.requestDetailBodyPreviewEnabled = true
+    if (error.name === 'AbortError') return
+    showToast('更新请求体预览配置失败', 'error')
+    console.error(error)
+  }
 }
 
 // 服务倍率配置
@@ -2421,6 +2514,7 @@ const loadClaudeConfig = async () => {
         requestDetailCaptureEnabled: response.config?.requestDetailCaptureEnabled ?? false,
         requestDetailRetentionHours:
           response.config?.requestDetailRetentionHours ?? REQUEST_DETAIL_RETENTION_DEFAULT_HOURS,
+        requestDetailBodyPreviewEnabled: response.config?.requestDetailBodyPreviewEnabled ?? false,
         updatedAt: response.config?.updatedAt || null,
         updatedBy: response.config?.updatedBy || null
       }
@@ -2439,7 +2533,7 @@ const loadClaudeConfig = async () => {
 }
 
 // 保存 Claude 转发配置
-const saveClaudeConfig = async () => {
+const saveClaudeConfig = async (options = {}) => {
   if (!isMounted.value) return
   try {
     const payload = {
@@ -2456,7 +2550,12 @@ const saveClaudeConfig = async () => {
         claudeConfig.value.concurrentRequestQueueMaxSizeMultiplier,
       concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs,
       requestDetailCaptureEnabled: claudeConfig.value.requestDetailCaptureEnabled,
-      requestDetailRetentionHours: claudeConfig.value.requestDetailRetentionHours
+      requestDetailRetentionHours: claudeConfig.value.requestDetailRetentionHours,
+      requestDetailBodyPreviewEnabled: claudeConfig.value.requestDetailBodyPreviewEnabled
+    }
+
+    if (options.purgeRequestDetailBodySnapshots === true) {
+      payload.purgeRequestDetailBodySnapshots = true
     }
 
     const response = await httpApis.updateClaudeRelayConfigApi(payload, {
@@ -2468,17 +2567,30 @@ const saveClaudeConfig = async () => {
         requestDetailRetentionHours:
           response.config?.requestDetailRetentionHours ??
           claudeConfig.value.requestDetailRetentionHours,
+        requestDetailBodyPreviewEnabled:
+          response.config?.requestDetailBodyPreviewEnabled ??
+          claudeConfig.value.requestDetailBodyPreviewEnabled,
         updatedAt: response.config?.updatedAt || new Date().toISOString(),
         updatedBy: response.config?.updatedBy || null
       }
       syncRequestDetailRetentionInput(claudeConfig.value.requestDetailRetentionHours)
-      showToast('Claude 转发配置已保存', 'success')
+      showToast(
+        response.warning || response.message || 'Claude 转发配置已保存',
+        response.warning ? 'warning' : 'success'
+      )
+      return response
     }
+
+    if (isMounted.value) {
+      showToast(response.message || '保存 Claude 转发配置失败', 'error')
+    }
+    return response
   } catch (error) {
     if (error.name === 'AbortError') return
     if (!isMounted.value) return
     showToast('保存 Claude 转发配置失败', 'error')
     console.error(error)
+    return { success: false, message: error.message || '保存 Claude 转发配置失败' }
   }
 }
 

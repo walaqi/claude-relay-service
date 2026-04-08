@@ -32,7 +32,7 @@
               </span>
             </div>
             <p class="mt-1 text-sm text-gray-600 dark:text-gray-400 sm:text-base">
-              搜索每次请求的 API Key、使用账户、模型、接口、Token、费用、耗时与脱敏后的请求快照
+              {{ pageDescription }}
             </p>
           </div>
         </div>
@@ -551,6 +551,7 @@ const detailVisible = ref(false)
 const activeRequestId = ref('')
 const captureEnabled = ref(false)
 const retentionHours = ref(6)
+const bodyPreviewEnabled = ref(false)
 const records = ref([])
 const availableApiKeys = ref([])
 const availableAccounts = ref([])
@@ -584,6 +585,12 @@ const summary = reactive({
   cacheHitRate: 0,
   cacheCreateNotApplicable: false
 })
+
+const pageDescription = computed(() =>
+  bodyPreviewEnabled.value
+    ? '搜索每次请求的 API Key、使用账户、模型、接口、Token、费用、耗时与脱敏后的请求快照'
+    : '搜索每次请求的 API Key、使用账户、模型、接口、Token、费用、耗时与请求摘要'
+)
 
 const emptyHint = computed(() => {
   if (
@@ -621,6 +628,7 @@ const buildParams = (page) => {
 const syncResponseState = (data) => {
   captureEnabled.value = data.captureEnabled === true
   retentionHours.value = data.retentionHours || 6
+  bodyPreviewEnabled.value = data.bodyPreviewEnabled === true
   records.value = data.records || []
 
   const pageInfo = data.pagination || {}

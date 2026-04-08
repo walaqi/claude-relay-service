@@ -53,7 +53,8 @@ describe('requestDetailService', () => {
 
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionHours: 6
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: true
     })
     redis.getClient.mockReturnValue({ multi: jest.fn(() => multi) })
 
@@ -102,7 +103,8 @@ describe('requestDetailService', () => {
   test('listRequestDetails applies openai cache display flags and openai hit-rate formula', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionHours: 6
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: true
     })
 
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })
@@ -160,7 +162,8 @@ describe('requestDetailService', () => {
   test('listRequestDetails aggregates mixed openai and non-openai cache metrics correctly', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionHours: 6
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: true
     })
 
     redis.getApiKey.mockImplementation(async (keyId) => ({ name: `Key ${keyId}` }))
@@ -231,7 +234,8 @@ describe('requestDetailService', () => {
   test('listRequestDetails still exposes retained data when capture is disabled', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: false,
-      requestDetailRetentionHours: 6
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: false
     })
 
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })
@@ -274,7 +278,8 @@ describe('requestDetailService', () => {
   test('listRequestDetails derives reasoning from legacy preview-only records', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
-      requestDetailRetentionHours: 6
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: true
     })
 
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })
@@ -318,5 +323,123 @@ describe('requestDetailService', () => {
     expect(result.records).toHaveLength(1)
     expect(result.records[0].reasoningDisplay).toBe('high')
     expect(result.records[0].reasoningSource).toBe('reasoning.effort')
+  })
+
+  test('captureRequestDetail omits requestBodySnapshot when body preview is disabled', async () => {
+    const exec = jest.fn().mockResolvedValue([])
+    const multi = {
+      set: jest.fn().mockReturnThis(),
+      zadd: jest.fn().mockReturnThis(),
+      expire: jest.fn().mockReturnThis(),
+      exec
+    }
+
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: false
+    })
+    redis.getClient.mockReturnValue({ multi: jest.fn(() => multi) })
+
+    await requestDetailService.captureRequestDetail({
+      requestId: 'req_capture_no_preview',
+      timestamp: '2026-04-07T12:00:00.000Z',
+      endpoint: '/openai/v1/responses',
+      method: 'POST',
+      model: 'gpt-5.4',
+      requestBody: {
+        model: 'gpt-5.4',
+        reasoning: {
+          effort: 'high'
+        },
+        input: 'hello world'
+      }
+    })
+
+    const storedPayload = JSON.parse(multi.set.mock.calls[0][1])
+    expect(storedPayload.requestBodySnapshot).toBeUndefined()
+    expect(storedPayload.reasoningDisplay).toBe('high')
+    expect(storedPayload.reasoningSource).toBe('reasoning.effort')
+  })
+
+  test('getRequestBodyPreviewStats counts stored snapshots', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: false
+    })
+
+    redis.getClient.mockReturnValue({
+      scan: jest
+        .fn()
+        .mockResolvedValueOnce([
+          '0',
+          ['request_detail:item:req_1', 'request_detail:item:req_2', 'request_detail:item:req_3']
+        ]),
+      mget: jest.fn().mockResolvedValue([
+        JSON.stringify({ requestId: 'req_1', requestBodySnapshot: { model: 'gpt-5.4' } }),
+        JSON.stringify({ requestId: 'req_2', model: 'gpt-5.4' }),
+        JSON.stringify({
+          requestId: 'req_3',
+          requestBodySnapshot: {
+            preview: '{"model":"gpt-5.4"}'
+          }
+        })
+      ])
+    })
+
+    const result = await requestDetailService.getRequestBodyPreviewStats()
+
+    expect(result.bodyPreviewEnabled).toBe(false)
+    expect(result.snapshotCount).toBe(2)
+    expect(result.hasSnapshots).toBe(true)
+  })
+
+  test('purgeRequestBodySnapshots removes snapshots while keeping records', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: false
+    })
+
+    const exec = jest.fn().mockResolvedValue([])
+    const pipeline = {
+      set: jest.fn().mockReturnThis(),
+      exec
+    }
+    const client = {
+      scan: jest
+        .fn()
+        .mockResolvedValueOnce([
+          '0',
+          ['request_detail:item:req_1', 'request_detail:item:req_2']
+        ]),
+      mget: jest.fn().mockResolvedValue([
+        JSON.stringify({
+          requestId: 'req_1',
+          model: 'gpt-5.4',
+          requestBodySnapshot: { model: 'gpt-5.4' }
+        }),
+        JSON.stringify({
+          requestId: 'req_2',
+          model: 'claude-sonnet-4-6'
+        })
+      ]),
+      pipeline: jest.fn(() => pipeline)
+    }
+    redis.getClient.mockReturnValue(client)
+
+    const result = await requestDetailService.purgeRequestBodySnapshots()
+
+    expect(result.updatedRecords).toBe(1)
+    expect(pipeline.set).toHaveBeenCalledWith(
+      'request_detail:item:req_1',
+      JSON.stringify({
+        requestId: 'req_1',
+        model: 'gpt-5.4'
+      }),
+      'KEEPTTL'
+    )
+    expect(exec).toHaveBeenCalled()
   })
 })

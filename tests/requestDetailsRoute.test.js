@@ -12,7 +12,8 @@ jest.mock('../src/middleware/auth', () => ({
 
 jest.mock('../src/services/requestDetailService', () => ({
   listRequestDetails: jest.fn(),
-  getRequestDetail: jest.fn()
+  getRequestDetail: jest.fn(),
+  getRequestBodyPreviewStats: jest.fn()
 }))
 
 jest.mock('../src/utils/logger', () => ({
@@ -42,10 +43,16 @@ function createResponse() {
   return res
 }
 
+function findGetHandler(path) {
+  const route = mockRouter.get.mock.calls.find((call) => call[0] === path)
+  return route?.[2]
+}
+
 describe('requestDetails admin routes', () => {
   beforeEach(() => {
     requestDetailService.listRequestDetails.mockReset()
     requestDetailService.getRequestDetail.mockReset()
+    requestDetailService.getRequestBodyPreviewStats.mockReset()
   })
 
   test('returns 400 for invalid request detail queries', async () => {
@@ -53,7 +60,7 @@ describe('requestDetails admin routes', () => {
     error.statusCode = 400
     requestDetailService.listRequestDetails.mockRejectedValue(error)
 
-    const [, , handler] = mockRouter.get.mock.calls[0]
+    const handler = findGetHandler('/request-details')
     const res = createResponse()
 
     await handler({ query: { startDate: 'bad' } }, res)
@@ -73,7 +80,7 @@ describe('requestDetails admin routes', () => {
       }
     })
 
-    const [, , handler] = mockRouter.get.mock.calls[1]
+    const handler = findGetHandler('/request-details/:requestId')
     const res = createResponse()
 
     await handler({ params: { requestId: 'req_1' } }, res)
@@ -82,5 +89,25 @@ describe('requestDetails admin routes', () => {
     expect(res.body.success).toBe(true)
     expect(res.body.data.captureEnabled).toBe(false)
     expect(res.body.data.record.requestId).toBe('req_1')
+  })
+
+  test('returns request body preview stats', async () => {
+    requestDetailService.getRequestBodyPreviewStats.mockResolvedValue({
+      captureEnabled: true,
+      retentionHours: 6,
+      bodyPreviewEnabled: false,
+      snapshotCount: 3,
+      hasSnapshots: true
+    })
+
+    const handler = findGetHandler('/request-details/body-preview-stats')
+    const res = createResponse()
+
+    await handler({}, res)
+
+    expect(res.status).not.toHaveBeenCalled()
+    expect(res.body.success).toBe(true)
+    expect(res.body.data.snapshotCount).toBe(3)
+    expect(res.body.data.hasSnapshots).toBe(true)
   })
 })

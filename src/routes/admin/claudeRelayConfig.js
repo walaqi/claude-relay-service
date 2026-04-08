@@ -6,6 +6,7 @@
 const express = require('express')
 const { authenticateAdmin } = require('../../middleware/auth')
 const claudeRelayConfigService = require('../../services/claudeRelayConfigService')
+const requestDetailService = require('../../services/requestDetailService')
 const logger = require('../../utils/logger')
 
 const router = express.Router()
@@ -49,7 +50,9 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       concurrentRequestQueueMaxSizeMultiplier,
       concurrentRequestQueueTimeoutMs,
       requestDetailCaptureEnabled,
-      requestDetailRetentionHours
+      requestDetailRetentionHours,
+      requestDetailBodyPreviewEnabled,
+      purgeRequestDetailBodySnapshots
     } = req.body
 
     // 验证输入
@@ -184,6 +187,20 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       }
     }
 
+    if (
+      requestDetailBodyPreviewEnabled !== undefined &&
+      typeof requestDetailBodyPreviewEnabled !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'requestDetailBodyPreviewEnabled must be a boolean' })
+    }
+
+    if (
+      purgeRequestDetailBodySnapshots !== undefined &&
+      typeof purgeRequestDetailBodySnapshots !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'purgeRequestDetailBodySnapshots must be a boolean' })
+    }
+
     const updateData = {}
     if (claudeCodeOnlyEnabled !== undefined) {
       updateData.claudeCodeOnlyEnabled = claudeCodeOnlyEnabled
@@ -224,16 +241,32 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     if (requestDetailRetentionHours !== undefined) {
       updateData.requestDetailRetentionHours = requestDetailRetentionHours
     }
+    if (requestDetailBodyPreviewEnabled !== undefined) {
+      updateData.requestDetailBodyPreviewEnabled = requestDetailBodyPreviewEnabled
+    }
 
     const updatedConfig = await claudeRelayConfigService.updateConfig(
       updateData,
       req.admin?.username || 'unknown'
     )
 
+    let warning = null
+    let requestDetailBodyPreviewPurge = null
+    if (requestDetailBodyPreviewEnabled === false && purgeRequestDetailBodySnapshots === true) {
+      try {
+        requestDetailBodyPreviewPurge = await requestDetailService.purgeRequestBodySnapshots()
+      } catch (purgeError) {
+        logger.error('❌ Failed to purge request body previews after config update:', purgeError)
+        warning = `配置已保存，但历史请求体预览清理失败：${purgeError.message}`
+      }
+    }
+
     return res.json({
       success: true,
       message: 'Configuration updated successfully',
-      config: updatedConfig
+      config: updatedConfig,
+      warning,
+      requestDetailBodyPreviewPurge
     })
   } catch (error) {
     logger.error('❌ Failed to update Claude relay config:', error)
