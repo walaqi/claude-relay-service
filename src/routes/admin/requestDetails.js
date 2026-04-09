@@ -47,6 +47,24 @@ router.get('/request-details/body-preview-stats', authenticateAdmin, async (_req
   }
 })
 
+router.post('/request-details/body-preview-purge', authenticateAdmin, async (_req, res) => {
+  try {
+    const data = await requestDetailService.purgeRequestBodySnapshots()
+    return res.json({
+      success: true,
+      message: '清理完毕',
+      data
+    })
+  } catch (error) {
+    logger.error('❌ Failed to purge request body previews:', error)
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to purge request body previews',
+      message: error.message
+    })
+  }
+})
+
 router.get('/request-details/:requestId', authenticateAdmin, async (req, res) => {
   try {
     const { requestId } = req.params

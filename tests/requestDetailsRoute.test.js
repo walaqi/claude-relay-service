@@ -1,5 +1,6 @@
 const mockRouter = {
-  get: jest.fn()
+  get: jest.fn(),
+  post: jest.fn()
 }
 
 jest.mock('express', () => ({
@@ -13,7 +14,8 @@ jest.mock('../src/middleware/auth', () => ({
 jest.mock('../src/services/requestDetailService', () => ({
   listRequestDetails: jest.fn(),
   getRequestDetail: jest.fn(),
-  getRequestBodyPreviewStats: jest.fn()
+  getRequestBodyPreviewStats: jest.fn(),
+  purgeRequestBodySnapshots: jest.fn()
 }))
 
 jest.mock('../src/utils/logger', () => ({
@@ -48,11 +50,17 @@ function findGetHandler(path) {
   return route?.[2]
 }
 
+function findPostHandler(path) {
+  const route = mockRouter.post.mock.calls.find((call) => call[0] === path)
+  return route?.[2]
+}
+
 describe('requestDetails admin routes', () => {
   beforeEach(() => {
     requestDetailService.listRequestDetails.mockReset()
     requestDetailService.getRequestDetail.mockReset()
     requestDetailService.getRequestBodyPreviewStats.mockReset()
+    requestDetailService.purgeRequestBodySnapshots.mockReset()
   })
 
   test('returns 400 for invalid request detail queries', async () => {
@@ -109,5 +117,21 @@ describe('requestDetails admin routes', () => {
     expect(res.body.success).toBe(true)
     expect(res.body.data.snapshotCount).toBe(3)
     expect(res.body.data.hasSnapshots).toBe(true)
+  })
+
+  test('purges stored request body previews via dedicated route', async () => {
+    requestDetailService.purgeRequestBodySnapshots.mockResolvedValue({
+      updatedRecords: 7
+    })
+
+    const handler = findPostHandler('/request-details/body-preview-purge')
+    const res = createResponse()
+
+    await handler({}, res)
+
+    expect(res.status).not.toHaveBeenCalled()
+    expect(res.body.success).toBe(true)
+    expect(res.body.message).toBe('清理完毕')
+    expect(res.body.data.updatedRecords).toBe(7)
   })
 })

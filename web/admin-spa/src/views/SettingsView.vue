@@ -1210,10 +1210,11 @@
                         开启请求体预览会增加 Redis 存储压力
                       </p>
                       <div
-                        v-else
                         class="mt-3 flex flex-col gap-2 rounded-lg border border-gray-200 bg-white/70 p-3 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300 sm:flex-row sm:items-center sm:justify-between"
                       >
-                        <span>历史请求体预览不会自动删除；如需释放 Redis 存储，请手动清理。</span>
+                        <span>
+                          历史请求体预览可随时手动清理；清理仅影响已保存的历史预览，不影响当前开关对后续请求的行为。
+                        </span>
                         <button
                           class="inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
                           :disabled="
@@ -2248,10 +2249,16 @@ const handleRequestDetailBodyPreviewPurge = async () => {
     if (!confirmed) return
 
     requestDetailBodyPreviewPurging.value = true
-    await saveClaudeConfig({
-      requestDetailBodyPreviewEnabled: false,
-      purgeRequestDetailBodySnapshots: true
+    const purgeResponse = await httpApis.purgeRequestDetailBodyPreviewApi({
+      signal: abortController.value.signal
     })
+
+    if (purgeResponse?.success === false) {
+      showToast(purgeResponse.message || '清理历史请求体预览失败', 'error')
+      return
+    }
+
+    showToast(purgeResponse?.message || '清理完毕', 'success')
   } catch (error) {
     if (error?.name === 'AbortError') return
     showToast('清理历史请求体预览失败', 'error')
