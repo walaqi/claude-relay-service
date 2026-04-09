@@ -1200,7 +1200,7 @@
                         请求体预览
                       </label>
                       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        关闭后，请求明细详情页不再展示请求体预览，Redis 也不会继续保存请求体快照。
+                        关闭后，仅影响后续新请求不再保存请求体预览；历史预览可通过下方按钮手动清理。
                       </p>
                       <p
                         v-if="claudeConfig.requestDetailBodyPreviewEnabled"
@@ -1209,19 +1209,55 @@
                         <i class="fas fa-exclamation-triangle mr-1"></i>
                         开启请求体预览会增加 Redis 存储压力
                       </p>
+                      <div
+                        v-else
+                        class="mt-3 flex flex-col gap-2 rounded-lg border border-gray-200 bg-white/70 p-3 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <span>历史请求体预览不会自动删除；如需释放 Redis 存储，请手动清理。</span>
+                        <button
+                          class="inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
+                          :disabled="
+                            requestDetailBodyPreviewSaving || requestDetailBodyPreviewPurging
+                          "
+                          type="button"
+                          @click="handleRequestDetailBodyPreviewPurge"
+                        >
+                          <i
+                            class="mr-1.5"
+                            :class="
+                              requestDetailBodyPreviewPurging
+                                ? 'fas fa-spinner fa-spin'
+                                : 'fas fa-trash-alt'
+                            "
+                          ></i>
+                          {{ requestDetailBodyPreviewPurging ? '清理中...' : '清理历史预览' }}
+                        </button>
+                      </div>
                     </div>
 
-                    <label class="relative inline-flex cursor-pointer items-center">
-                      <input
-                        v-model="claudeConfig.requestDetailBodyPreviewEnabled"
-                        class="peer sr-only"
-                        type="checkbox"
-                        @change="handleRequestDetailBodyPreviewToggle"
-                      />
-                      <div
-                        class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-cyan-500 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cyan-300 dark:border-gray-600 dark:bg-gray-700 dark:peer-focus:ring-cyan-800"
-                      ></div>
-                    </label>
+                    <button
+                      :aria-checked="claudeConfig.requestDetailBodyPreviewEnabled"
+                      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-4 focus:ring-cyan-300 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-cyan-800"
+                      :class="
+                        claudeConfig.requestDetailBodyPreviewEnabled
+                          ? 'bg-cyan-500'
+                          : 'bg-gray-200 dark:bg-gray-700'
+                      "
+                      :disabled="requestDetailBodyPreviewSaving || requestDetailBodyPreviewPurging"
+                      role="switch"
+                      type="button"
+                      @click="handleRequestDetailBodyPreviewToggle"
+                    >
+                      <span class="sr-only">切换请求体预览</span>
+                      <span
+                        class="absolute left-[2px] top-[2px] h-5 w-5 rounded-full border bg-white transition-transform"
+                        :class="
+                          claudeConfig.requestDetailBodyPreviewEnabled
+                            ? 'translate-x-full border-white'
+                            : 'border-gray-300'
+                        "
+                      ></span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -2016,13 +2052,19 @@ const showConfirm = (
     showConfirmModal.value = true
   })
 }
+
 const handleConfirmModal = () => {
   showConfirmModal.value = false
-  confirmResolve.value?.(true)
+  const resolve = confirmResolve.value
+  confirmResolve.value = null
+  resolve?.(true)
 }
+
 const handleCancelModal = () => {
   showConfirmModal.value = false
-  confirmResolve.value?.(false)
+  const resolve = confirmResolve.value
+  confirmResolve.value = null
+  resolve?.(false)
 }
 
 // 计算属性：隐藏管理后台按钮（反转 showAdminButton 的值）
@@ -2090,6 +2132,8 @@ const requestDetailRetentionInput = reactive({
   days: 0,
   hours: REQUEST_DETAIL_RETENTION_DEFAULT_HOURS
 })
+const requestDetailBodyPreviewSaving = ref(false)
+const requestDetailBodyPreviewPurging = ref(false)
 
 const normalizeRetentionPart = (value) => {
   const parsed = Number.parseInt(value, 10)
@@ -2163,14 +2207,24 @@ const handleRequestDetailRetentionChange = () => {
 }
 
 const handleRequestDetailBodyPreviewToggle = async () => {
-  const nextValue = claudeConfig.value.requestDetailBodyPreviewEnabled === true
+  if (requestDetailBodyPreviewSaving.value || requestDetailBodyPreviewPurging.value) return
 
-  if (nextValue) {
-    await saveClaudeConfig()
-    return
+  const nextValue = !claudeConfig.value.requestDetailBodyPreviewEnabled
+
+  requestDetailBodyPreviewSaving.value = true
+  try {
+    await saveClaudeConfig({ requestDetailBodyPreviewEnabled: nextValue })
+  } catch (error) {
+    if (error?.name === 'AbortError') return
+    showToast('更新请求体预览配置失败', 'error')
+    console.error(error)
+  } finally {
+    requestDetailBodyPreviewSaving.value = false
   }
+}
 
-  let shouldPurgeSnapshots = false
+const handleRequestDetailBodyPreviewPurge = async () => {
+  if (requestDetailBodyPreviewSaving.value || requestDetailBodyPreviewPurging.value) return
 
   try {
     const statsResponse = await httpApis.getRequestDetailBodyPreviewStatsApi({
@@ -2178,40 +2232,32 @@ const handleRequestDetailBodyPreviewToggle = async () => {
     })
 
     if (statsResponse?.success === false) {
-      claudeConfig.value.requestDetailBodyPreviewEnabled = true
       showToast(statsResponse.message || '检查历史请求体预览失败', 'error')
       return
     }
 
     const snapshotCount = Number(statsResponse?.data?.snapshotCount || 0)
-    if (snapshotCount > 0) {
-      const confirmed = await showConfirm(
-        '关闭请求体预览',
-        `检测到当前仍有 ${snapshotCount} 条请求明细保存了请求体预览。\n关闭后会移除这些历史请求体预览，且后续新请求也不再保存预览。\n\n是否继续？`,
-        '确认关闭',
-        '取消',
-        'danger'
-      )
-
-      if (!confirmed) {
-        claudeConfig.value.requestDetailBodyPreviewEnabled = true
-        return
-      }
-
-      shouldPurgeSnapshots = true
+    if (snapshotCount <= 0) {
+      showToast('暂无历史请求体预览需要清理', 'success')
+      return
     }
 
-    const response = await saveClaudeConfig({
-      purgeRequestDetailBodySnapshots: shouldPurgeSnapshots
+    const confirmed = window.confirm(
+      `检测到当前仍有 ${snapshotCount} 条请求明细保存了请求体预览。\n清理后将仅移除历史请求体预览，保留请求明细摘要字段。\n\n是否继续？`
+    )
+    if (!confirmed) return
+
+    requestDetailBodyPreviewPurging.value = true
+    await saveClaudeConfig({
+      requestDetailBodyPreviewEnabled: false,
+      purgeRequestDetailBodySnapshots: true
     })
-    if (response?.success === false) {
-      claudeConfig.value.requestDetailBodyPreviewEnabled = true
-    }
   } catch (error) {
-    claudeConfig.value.requestDetailBodyPreviewEnabled = true
-    if (error.name === 'AbortError') return
-    showToast('更新请求体预览配置失败', 'error')
+    if (error?.name === 'AbortError') return
+    showToast('清理历史请求体预览失败', 'error')
     console.error(error)
+  } finally {
+    requestDetailBodyPreviewPurging.value = false
   }
 }
 
@@ -2536,6 +2582,13 @@ const loadClaudeConfig = async () => {
 const saveClaudeConfig = async (options = {}) => {
   if (!isMounted.value) return
   try {
+    const requestDetailBodyPreviewEnabled = Object.prototype.hasOwnProperty.call(
+      options,
+      'requestDetailBodyPreviewEnabled'
+    )
+      ? options.requestDetailBodyPreviewEnabled === true
+      : claudeConfig.value.requestDetailBodyPreviewEnabled
+
     const payload = {
       claudeCodeOnlyEnabled: claudeConfig.value.claudeCodeOnlyEnabled,
       globalSessionBindingEnabled: claudeConfig.value.globalSessionBindingEnabled,
@@ -2551,7 +2604,7 @@ const saveClaudeConfig = async (options = {}) => {
       concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs,
       requestDetailCaptureEnabled: claudeConfig.value.requestDetailCaptureEnabled,
       requestDetailRetentionHours: claudeConfig.value.requestDetailRetentionHours,
-      requestDetailBodyPreviewEnabled: claudeConfig.value.requestDetailBodyPreviewEnabled
+      requestDetailBodyPreviewEnabled
     }
 
     if (options.purgeRequestDetailBodySnapshots === true) {

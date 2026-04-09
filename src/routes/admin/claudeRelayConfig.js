@@ -261,6 +261,22 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       }
     }
 
+    if (
+      requestDetailBodyPreviewEnabled !== undefined ||
+      purgeRequestDetailBodySnapshots !== undefined
+    ) {
+      logger.info('🧾 Request body preview config updated', {
+        requestDetailBodyPreviewEnabled:
+          requestDetailBodyPreviewEnabled !== undefined
+            ? requestDetailBodyPreviewEnabled
+            : updatedConfig.requestDetailBodyPreviewEnabled,
+        purgeRequestDetailBodySnapshots: purgeRequestDetailBodySnapshots === true,
+        purgedSnapshots:
+          requestDetailBodyPreviewPurge?.updatedRecords ??
+          requestDetailBodyPreviewPurge?.matchedRecords
+      })
+    }
+
     return res.json({
       success: true,
       message: 'Configuration updated successfully',
