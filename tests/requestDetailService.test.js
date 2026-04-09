@@ -21,7 +21,9 @@ jest.mock('../src/services/account/ccrAccountService', () => ({ getAccount: jest
 jest.mock('../src/services/account/geminiAccountService', () => ({ getAccount: jest.fn() }))
 jest.mock('../src/services/account/geminiApiAccountService', () => ({ getAccount: jest.fn() }))
 jest.mock('../src/services/account/openaiAccountService', () => ({ getAccount: jest.fn() }))
-jest.mock('../src/services/account/openaiResponsesAccountService', () => ({ getAccount: jest.fn() }))
+jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
+  getAccount: jest.fn()
+}))
 jest.mock('../src/services/account/azureOpenaiAccountService', () => ({ getAccount: jest.fn() }))
 jest.mock('../src/services/account/droidAccountService', () => ({ getAccount: jest.fn() }))
 jest.mock('../src/services/account/bedrockAccountService', () => ({ getAccount: jest.fn() }))
@@ -175,12 +177,9 @@ describe('requestDetailService', () => {
     )
 
     redis.getClient.mockReturnValue({
-      zrangebyscore: jest.fn().mockResolvedValue([
-        'req_openai',
-        '1775563200000',
-        'req_claude',
-        '1775566800000'
-      ]),
+      zrangebyscore: jest
+        .fn()
+        .mockResolvedValue(['req_openai', '1775563200000', 'req_claude', '1775566800000']),
       mget: jest.fn().mockResolvedValue([
         JSON.stringify({
           requestId: 'req_openai',
@@ -229,6 +228,51 @@ describe('requestDetailService', () => {
     expect(result.summary.cacheCreateNotApplicable).toBe(false)
     expect(result.summary.cacheCreateTokens).toBe(30)
     expect(result.summary.cacheHitRate).toBe(40.91)
+  })
+
+  test('listRequestDetails treats azure-openai cache hits as openai-style metrics', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: true
+    })
+
+    redis.getApiKey.mockResolvedValue({ name: 'Azure Key' })
+
+    redis.getClient.mockReturnValue({
+      zrangebyscore: jest.fn().mockResolvedValue(['req_azure', '1775563200000']),
+      mget: jest.fn().mockResolvedValue([
+        JSON.stringify({
+          requestId: 'req_azure',
+          timestamp: '2026-04-07T12:00:00.000Z',
+          endpoint: '/azure/chat/completions',
+          method: 'POST',
+          apiKeyId: 'key_azure',
+          accountId: 'acct_azure',
+          accountType: 'azure-openai',
+          model: 'gpt-4o',
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 60,
+          cacheCreateTokens: 0,
+          totalTokens: 180,
+          cost: 0.3,
+          durationMs: 500
+        })
+      ])
+    })
+
+    const result = await requestDetailService.listRequestDetails({
+      startDate: '2026-04-07T00:00:00.000Z',
+      endDate: '2026-04-07T23:59:59.000Z'
+    })
+
+    expect(result.records).toHaveLength(1)
+    expect(result.records[0].isOpenAIRelated).toBe(true)
+    expect(result.records[0].cacheCreateNotApplicable).toBe(true)
+    expect(result.records[0].cacheHitRate).toBe(37.5)
+    expect(result.summary.cacheCreateTokens).toBe(0)
+    expect(result.summary.cacheHitRate).toBe(37.5)
   })
 
   test('listRequestDetails still exposes retained data when capture is disabled', async () => {
@@ -410,10 +454,7 @@ describe('requestDetailService', () => {
     const client = {
       scan: jest
         .fn()
-        .mockResolvedValueOnce([
-          '0',
-          ['request_detail:item:req_1', 'request_detail:item:req_2']
-        ]),
+        .mockResolvedValueOnce(['0', ['request_detail:item:req_1', 'request_detail:item:req_2']]),
       mget: jest.fn().mockResolvedValue([
         JSON.stringify({
           requestId: 'req_1',

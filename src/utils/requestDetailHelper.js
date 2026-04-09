@@ -1,4 +1,5 @@
-const SENSITIVE_KEY_PATTERN = /(authorization|proxy-authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|cookie|set-cookie|client_secret|private[_-]?key|proxy)/i
+const SENSITIVE_KEY_PATTERN =
+  /(authorization|proxy-authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|cookie|set-cookie|client_secret|private[_-]?key|proxy)/i
 const DEFAULT_MAX_STRING_CHARS = 80
 const DEFAULT_MAX_ARRAY_ITEMS = 24
 const DEFAULT_MAX_DEPTH = 6
@@ -6,6 +7,7 @@ const DEFAULT_MAX_TOTAL_CHARS = 12000
 const ENCRYPTED_CONTENT_KEY = 'encrypted_content'
 const TOOLS_KEY = 'tools'
 const PREVIEW_TRUNCATION_SUFFIX_PATTERN = /\.\.\.\[(?:truncated )?(\d+) chars\]$/
+const OPENAI_RELATED_ACCOUNT_TYPES = new Set(['openai', 'openai-responses', 'azure-openai'])
 
 function toFiniteNumber(value) {
   if (value === undefined || value === null || value === '') {
@@ -451,9 +453,7 @@ function sanitizeValue(value, ctx) {
 
       if (key === TOOLS_KEY) {
         if (Array.isArray(childValue)) {
-          result[key] = childValue
-            .slice(0, maxArrayItems)
-            .map((item) => summarizeToolEntry(item))
+          result[key] = childValue.slice(0, maxArrayItems).map((item) => summarizeToolEntry(item))
 
           if (childValue.length > maxArrayItems) {
             result[key].push(`...[${childValue.length - maxArrayItems} more items]`)
@@ -543,6 +543,25 @@ function getRequestEndpoint(req) {
   return queryIndex >= 0 ? originalUrl.slice(0, queryIndex) : originalUrl
 }
 
+function toTimestampMs(value) {
+  const numericValue = toFiniteNumber(value)
+  if (numericValue !== null) {
+    return numericValue
+  }
+
+  if (value instanceof Date) {
+    const dateValue = value.getTime()
+    return Number.isFinite(dateValue) ? dateValue : null
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function createRequestDetailMeta(req, overrides = {}) {
   const nowMs = Date.now()
   const statusCode = toFiniteNumber(overrides.statusCode)
@@ -564,6 +583,23 @@ function createRequestDetailMeta(req, overrides = {}) {
     durationMs: durationMs ?? (effectiveStart ? Math.max(0, nowMs - effectiveStart) : null),
     requestStartedAt: effectiveStart ? new Date(effectiveStart).toISOString() : null,
     requestBody
+  }
+}
+
+function finalizeRequestDetailMeta(requestMeta = null) {
+  if (!requestMeta || typeof requestMeta !== 'object') {
+    return null
+  }
+
+  const requestStartedAtMs = toTimestampMs(requestMeta.requestStartedAt)
+  const durationMs =
+    requestStartedAtMs !== null
+      ? Math.max(0, Date.now() - requestStartedAtMs)
+      : toFiniteNumber(requestMeta.durationMs)
+
+  return {
+    ...requestMeta,
+    durationMs
   }
 }
 
@@ -594,14 +630,32 @@ function extractOpenAICacheReadTokens(usage = {}) {
 }
 
 function isOpenAIRelatedEndpoint(endpoint) {
-  return typeof endpoint === 'string' && endpoint.startsWith('/openai/')
+  if (typeof endpoint !== 'string') {
+    return false
+  }
+
+  if (endpoint.startsWith('/azure/') || endpoint.startsWith('/droid/openai/')) {
+    return true
+  }
+
+  if (!endpoint.startsWith('/openai/')) {
+    return false
+  }
+
+  return !(
+    endpoint === '/openai/claude' ||
+    endpoint === '/openai/gemini' ||
+    endpoint.startsWith('/openai/claude/') ||
+    endpoint.startsWith('/openai/gemini/')
+  )
 }
 
 function getRequestDetailCacheMetrics(detail = {}) {
   const read = Math.max(0, Number(detail.cacheReadTokens) || 0)
   const create = Math.max(0, Number(detail.cacheCreateTokens) || 0)
   const input = Math.max(0, Number(detail.inputTokens) || 0)
-  const isOpenAIRelated = isOpenAIRelatedEndpoint(detail.endpoint)
+  const isOpenAIRelated =
+    OPENAI_RELATED_ACCOUNT_TYPES.has(detail.accountType) || isOpenAIRelatedEndpoint(detail.endpoint)
   const denominator = isOpenAIRelated ? input + read : read + create
 
   if (denominator <= 0) {
@@ -623,13 +677,13 @@ function getRequestDetailCacheMetrics(detail = {}) {
   }
 }
 
-function calculateCacheHitRate(inputOrDetail = 0, cacheReadTokens = 0, cacheCreateTokens = 0) {
-  if (typeof inputOrDetail === 'object' && inputOrDetail !== null) {
-    return getRequestDetailCacheMetrics(inputOrDetail).rate
+function calculateCacheHitRate(cacheReadTokensOrDetail = 0, cacheCreateTokens = 0) {
+  if (typeof cacheReadTokensOrDetail === 'object' && cacheReadTokensOrDetail !== null) {
+    return getRequestDetailCacheMetrics(cacheReadTokensOrDetail).rate
   }
 
-  const read = Math.max(0, Number(inputOrDetail) || 0)
-  const create = Math.max(0, Number(cacheReadTokens) || 0)
+  const read = Math.max(0, Number(cacheReadTokensOrDetail) || 0)
+  const create = Math.max(0, Number(cacheCreateTokens) || 0)
   const denominator = read + create
 
   if (denominator <= 0) {
@@ -644,6 +698,7 @@ module.exports = {
   extractRequestReasoningInfo,
   resolveRequestDetailReasoning,
   createRequestDetailMeta,
+  finalizeRequestDetailMeta,
   extractOpenAICacheReadTokens,
   isOpenAIRelatedEndpoint,
   getRequestDetailCacheMetrics,

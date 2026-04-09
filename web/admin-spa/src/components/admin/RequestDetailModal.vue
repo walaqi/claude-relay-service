@@ -181,15 +181,11 @@
         >
           <div class="mb-3 flex items-center justify-between gap-3">
             <h4 class="section-title mb-0">Request Body 快照</h4>
-            <el-button
-              v-if="bodyPreviewEnabled && detail.requestBodySnapshot"
-              size="small"
-              @click="copySnapshot"
-            >
+            <el-button v-if="hasRequestBodySnapshot" size="small" @click="copySnapshot">
               复制 JSON
             </el-button>
           </div>
-          <div v-if="bodyPreviewEnabled && detail.requestBodySnapshot" class="snapshot-panel">
+          <div v-if="hasRequestBodySnapshot" class="snapshot-panel">
             <pre>{{ formattedSnapshot }}</pre>
           </div>
           <div
@@ -352,6 +348,8 @@ const extractSnapshotDisplaySource = (snapshot) => {
 
   return snapshot
 }
+
+const hasRequestBodySnapshot = computed(() => Boolean(detail.value?.requestBodySnapshot))
 
 const formattedSnapshot = computed(() => {
   if (!detail.value?.requestBodySnapshot) {

@@ -3,12 +3,17 @@ const {
   extractRequestReasoningInfo,
   resolveRequestDetailReasoning,
   createRequestDetailMeta,
+  finalizeRequestDetailMeta,
   extractOpenAICacheReadTokens,
   isOpenAIRelatedEndpoint,
   calculateCacheHitRate
 } = require('../src/utils/requestDetailHelper')
 
 describe('requestDetailHelper', () => {
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
   test('sanitizeRequestBodySnapshot redacts secrets and truncates long text', () => {
     const snapshot = sanitizeRequestBodySnapshot({
       apiKey: 'super-secret-api-key',
@@ -26,7 +31,10 @@ describe('requestDetailHelper', () => {
 
   test('sanitizeRequestBodySnapshot keeps all object keys while truncating long values', () => {
     const payload = Object.fromEntries(
-      Array.from({ length: 50 }, (_, index) => [`key_${index}`, `value-${index}-${'x'.repeat(100)}`])
+      Array.from({ length: 50 }, (_, index) => [
+        `key_${index}`,
+        `value-${index}-${'x'.repeat(100)}`
+      ])
     )
 
     const snapshot = sanitizeRequestBodySnapshot(payload)
@@ -178,11 +186,25 @@ describe('requestDetailHelper', () => {
     expect(meta.requestBody).toEqual(req.body)
   })
 
-  test('identifies /openai/ request detail endpoints', () => {
+  test('finalizeRequestDetailMeta refreshes duration from requestStartedAt', () => {
+    jest.useFakeTimers().setSystemTime(Date.parse('2026-04-09T05:00:00.500Z'))
+
+    const meta = finalizeRequestDetailMeta({
+      requestId: 'req_123',
+      requestStartedAt: '2026-04-09T05:00:00.000Z',
+      durationMs: 25
+    })
+
+    expect(meta.durationMs).toBe(500)
+  })
+
+  test('identifies openai-style request detail endpoints', () => {
     expect(isOpenAIRelatedEndpoint('/openai/v1/responses')).toBe(true)
     expect(isOpenAIRelatedEndpoint('/openai/responses')).toBe(true)
+    expect(isOpenAIRelatedEndpoint('/azure/chat/completions')).toBe(true)
+    expect(isOpenAIRelatedEndpoint('/droid/openai/v1/responses')).toBe(true)
+    expect(isOpenAIRelatedEndpoint('/openai/claude/v1/messages')).toBe(false)
     expect(isOpenAIRelatedEndpoint('/v1/messages')).toBe(false)
-    expect(isOpenAIRelatedEndpoint('/azure/openai/deployments/foo')).toBe(false)
   })
 
   test('extractOpenAICacheReadTokens prefers input_tokens_details.cached_tokens', () => {
@@ -252,5 +274,27 @@ describe('requestDetailHelper', () => {
         cacheReadTokens: 0
       })
     ).toBe(0)
+  })
+
+  test('calculateCacheHitRate uses openai formula for azure records and non-openai formula for claude compatibility routes', () => {
+    expect(
+      calculateCacheHitRate({
+        endpoint: '/azure/chat/completions',
+        accountType: 'azure-openai',
+        inputTokens: 100,
+        cacheReadTokens: 60,
+        cacheCreateTokens: 0
+      })
+    ).toBe(37.5)
+
+    expect(
+      calculateCacheHitRate({
+        endpoint: '/openai/claude/v1/messages',
+        accountType: 'claude',
+        inputTokens: 100,
+        cacheReadTokens: 30,
+        cacheCreateTokens: 20
+      })
+    ).toBe(60)
   })
 })

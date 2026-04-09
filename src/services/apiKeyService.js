@@ -6,6 +6,7 @@ const logger = require('../utils/logger')
 const serviceRatesService = require('./serviceRatesService')
 const requestDetailService = require('./requestDetailService')
 const { isClaudeFamilyModel } = require('../utils/modelHelper')
+const { finalizeRequestDetailMeta } = require('../utils/requestDetailHelper')
 
 const ACCOUNT_TYPE_CONFIG = {
   claude: { prefix: 'claude:account:' },
@@ -1541,6 +1542,7 @@ class ApiKeyService {
     requestMeta = null
   ) {
     try {
+      const finalizedRequestMeta = finalizeRequestDetailMeta(requestMeta)
       const totalTokens = inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
 
       // 计算费用
@@ -1646,12 +1648,12 @@ class ApiKeyService {
         model,
         accountId: accountId || null,
         accountType: accountType || null,
-        requestId: requestMeta?.requestId || null,
-        endpoint: requestMeta?.endpoint || null,
-        method: requestMeta?.method || null,
-        statusCode: requestMeta?.statusCode || null,
-        stream: requestMeta?.stream === true,
-        durationMs: requestMeta?.durationMs ?? null,
+        requestId: finalizedRequestMeta?.requestId || null,
+        endpoint: finalizedRequestMeta?.endpoint || null,
+        method: finalizedRequestMeta?.method || null,
+        statusCode: finalizedRequestMeta?.statusCode || null,
+        stream: finalizedRequestMeta?.stream === true,
+        durationMs: finalizedRequestMeta?.durationMs ?? null,
         inputTokens,
         outputTokens,
         cacheCreateTokens,
@@ -1665,7 +1667,7 @@ class ApiKeyService {
       }
 
       await redis.addUsageRecord(keyId, usageRecord)
-      this._captureRequestDetail(keyId, usageRecord, requestMeta).catch((captureError) => {
+      this._captureRequestDetail(keyId, usageRecord, finalizedRequestMeta).catch((captureError) => {
         logger.warn(`⚠️ Failed to schedule request detail capture: ${captureError.message}`)
       })
 
@@ -1729,6 +1731,7 @@ class ApiKeyService {
     requestMeta = null
   ) {
     try {
+      const finalizedRequestMeta = finalizeRequestDetailMeta(requestMeta)
       // 提取 token 数量
       const inputTokens = usageObject.input_tokens || 0
       const outputTokens = usageObject.output_tokens || 0
@@ -1904,12 +1907,12 @@ class ApiKeyService {
         model,
         accountId: accountId || null,
         accountType: accountType || null,
-        requestId: requestMeta?.requestId || null,
-        endpoint: requestMeta?.endpoint || null,
-        method: requestMeta?.method || null,
-        statusCode: requestMeta?.statusCode || null,
-        stream: requestMeta?.stream === true,
-        durationMs: requestMeta?.durationMs ?? null,
+        requestId: finalizedRequestMeta?.requestId || null,
+        endpoint: finalizedRequestMeta?.endpoint || null,
+        method: finalizedRequestMeta?.method || null,
+        statusCode: finalizedRequestMeta?.statusCode || null,
+        stream: finalizedRequestMeta?.stream === true,
+        durationMs: finalizedRequestMeta?.durationMs ?? null,
         inputTokens,
         outputTokens,
         cacheCreateTokens,
@@ -1931,7 +1934,7 @@ class ApiKeyService {
       }
 
       await redis.addUsageRecord(keyId, usageRecord)
-      this._captureRequestDetail(keyId, usageRecord, requestMeta).catch((captureError) => {
+      this._captureRequestDetail(keyId, usageRecord, finalizedRequestMeta).catch((captureError) => {
         logger.warn(`⚠️ Failed to schedule request detail capture: ${captureError.message}`)
       })
 

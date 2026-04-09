@@ -122,7 +122,6 @@
                       start-placeholder="开始时间"
                       type="datetimerange"
                       unlink-panels
-                      value-format="YYYY-MM-DDTHH:mm:ss[Z]"
                     />
                   </div>
 
@@ -605,6 +604,30 @@ const emptyHint = computed(() => {
   return '这里只展示开启请求明细采集之后的新请求记录。'
 })
 
+const toPickerDate = (value) => {
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.toDate() : null
+}
+
+const getDateRangeTimestamp = (value) => {
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.valueOf() : null
+}
+
+const areDateRangesEqual = (currentRange = [], nextRange = []) => {
+  if (!Array.isArray(currentRange) || !Array.isArray(nextRange)) {
+    return false
+  }
+
+  if (currentRange.length !== nextRange.length) {
+    return false
+  }
+
+  return currentRange.every(
+    (value, index) => getDateRangeTimestamp(value) === getDateRangeTimestamp(nextRange[index])
+  )
+}
+
 const buildParams = (page) => {
   const params = {
     page,
@@ -618,8 +641,14 @@ const buildParams = (page) => {
   if (filters.model) params.model = filters.model
   if (filters.endpoint) params.endpoint = filters.endpoint
   if (filters.dateRange && filters.dateRange.length === 2) {
-    params.startDate = dayjs(filters.dateRange[0]).toISOString()
-    params.endDate = dayjs(filters.dateRange[1]).toISOString()
+    const [startDate, endDate] = filters.dateRange
+    const parsedStart = dayjs(startDate)
+    const parsedEnd = dayjs(endDate)
+
+    if (parsedStart.isValid() && parsedEnd.isValid()) {
+      params.startDate = parsedStart.toISOString()
+      params.endDate = parsedEnd.toISOString()
+    }
   }
 
   return params
@@ -644,11 +673,11 @@ const syncResponseState = (data) => {
   filters.endpoint = filterEcho.endpoint || ''
   filters.sortOrder = filterEcho.sortOrder || 'desc'
   if (filterEcho.startDate && filterEcho.endDate) {
-    const nextRange = [filterEcho.startDate, filterEcho.endDate]
-    const currentRange = filters.dateRange || []
+    const nextRange = [toPickerDate(filterEcho.startDate), toPickerDate(filterEcho.endDate)]
     if (
       filterEcho.hasCustomDateRange &&
-      (currentRange[0] !== nextRange[0] || currentRange[1] !== nextRange[1])
+      nextRange.every(Boolean) &&
+      !areDateRangesEqual(filters.dateRange || [], nextRange)
     ) {
       filters.dateRange = nextRange
     }
