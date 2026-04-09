@@ -312,7 +312,7 @@
 
         <div v-else class="space-y-4">
           <div class="table-container hidden xl:block">
-            <table class="request-table min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <table class="request-table w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead
                 class="sticky top-0 z-10 bg-gradient-to-b from-gray-50 to-gray-100/90 backdrop-blur-sm dark:from-gray-700 dark:to-gray-800/90"
               >
@@ -1023,6 +1023,10 @@ onMounted(() => {
   min-width: 1500px;
   border-collapse: collapse;
   table-layout: auto;
+}
+
+.request-table {
+  width: max(100%, 1500px);
 }
 
 .table-container::-webkit-scrollbar {

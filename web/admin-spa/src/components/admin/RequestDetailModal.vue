@@ -4,25 +4,31 @@
     class="request-detail-modal"
     :close-on-click-modal="false"
     :destroy-on-close="true"
+    :fullscreen="isMobileViewport"
     :model-value="show"
+    :show-close="false"
     top="6vh"
-    width="900px"
+    width="960px"
     @close="emitClose"
   >
     <template #header>
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-500">请求明细</p>
+      <div class="flex flex-wrap items-start justify-between gap-3 sm:flex-nowrap sm:items-center">
+        <div class="min-w-0 flex-1">
           <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">
             {{ detail?.model || '加载中...' }}
           </h3>
-          <p class="text-xs text-gray-500 dark:text-gray-400">
+          <p class="mt-1 break-all text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
             Request ID: {{ requestId || '未知' }}
           </p>
         </div>
-        <el-tag v-if="detail" effect="dark" :type="statusTagType(detail.statusCode)">
-          {{ detail.statusCode || 200 }}
-        </el-tag>
+        <div class="flex items-center gap-2 self-start sm:self-center">
+          <el-tag v-if="detail" effect="dark" :type="statusTagType(detail.statusCode)">
+            {{ detail.statusCode || 200 }}
+          </el-tag>
+          <button aria-label="关闭" class="modal-close-button" type="button" @click="emitClose">
+            <i class="fas fa-times" />
+          </button>
+        </div>
       </div>
     </template>
 
@@ -205,7 +211,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { getRequestDetailApi } from '@/utils/http_apis'
 import { showToast, formatNumber } from '@/utils/tools'
@@ -226,6 +232,7 @@ const emit = defineEmits(['close'])
 const loading = ref(false)
 const detail = ref(null)
 const bodyPreviewEnabled = ref(false)
+const isMobileViewport = ref(false)
 
 const costBreakdown = computed(() => {
   const breakdown = detail.value?.realCostBreakdown || detail.value?.costBreakdown || {}
@@ -425,6 +432,13 @@ const statusTagType = (statusCode) => {
   return 'success'
 }
 
+const syncViewportState = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  isMobileViewport.value = window.innerWidth < 768
+}
+
 watch(
   () => [props.show, props.requestId],
   () => {
@@ -442,11 +456,87 @@ watch(
     }
   }
 )
+
+onMounted(() => {
+  syncViewportState()
+  window.addEventListener('resize', syncViewportState)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncViewportState)
+})
 </script>
 
 <style scoped>
+.request-detail-modal :deep(.el-dialog) {
+  width: min(960px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 24px;
+}
+
+.request-detail-modal :deep(.el-dialog__header) {
+  margin: 0;
+  padding: 18px 20px 0;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(10px);
+}
+
+.dark .request-detail-modal :deep(.el-dialog__header) {
+  background: rgba(17, 24, 39, 0.98);
+}
+
 .request-detail-modal :deep(.el-dialog__body) {
-  padding-top: 8px;
+  padding: 12px 20px 20px;
+  max-height: min(78vh, 920px);
+  overflow-y: auto;
+}
+
+.request-detail-modal :deep(.el-dialog.is-fullscreen) {
+  width: 100vw !important;
+  max-width: none;
+  height: 100vh;
+  margin: 0;
+  border-radius: 0;
+}
+
+.request-detail-modal :deep(.el-dialog.is-fullscreen .el-dialog__header) {
+  padding: 14px 16px 0;
+}
+
+.request-detail-modal :deep(.el-dialog.is-fullscreen .el-dialog__body) {
+  padding: 12px 16px 24px;
+  max-height: none;
+  height: calc(100vh - 76px);
+}
+
+.modal-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  color: rgb(100 116 139);
+  transition: all 0.2s ease;
+}
+
+.modal-close-button:hover {
+  background: rgba(148, 163, 184, 0.14);
+  color: rgb(51 65 85);
+}
+
+.dark .modal-close-button {
+  color: rgb(203 213 225);
+}
+
+.dark .modal-close-button:hover {
+  background: rgba(71, 85, 105, 0.35);
+  color: rgb(248 250 252);
 }
 
 .info-card {
@@ -535,5 +625,39 @@ watch(
   font-size: 12px;
   line-height: 1.55;
   color: rgb(226 232 240);
+}
+
+@media (max-width: 767px) {
+  .request-detail-modal :deep(.el-dialog__header) {
+    padding: 14px 16px 0;
+  }
+
+  .request-detail-modal :deep(.el-dialog__body) {
+    padding: 12px 16px 20px;
+    max-height: calc(100vh - 88px);
+  }
+
+  .info-card {
+    padding: 14px;
+  }
+
+  .info-value,
+  .field-value {
+    font-size: 16px;
+  }
+
+  .cost-chip {
+    padding: 10px 12px;
+  }
+
+  .snapshot-panel {
+    max-height: min(42vh, 420px);
+    padding: 14px;
+  }
+
+  .snapshot-panel pre {
+    font-size: 11px;
+    line-height: 1.5;
+  }
 }
 </style>
