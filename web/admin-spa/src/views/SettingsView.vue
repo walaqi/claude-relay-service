@@ -1200,7 +1200,7 @@
                         请求体预览
                       </label>
                       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        关闭后，仅影响后续新请求不再保存请求体预览；历史预览可通过下方按钮手动清理。
+                        关闭后，仅影响后续新请求不再保存请求体预览；历史预览可在「请求明细」页面手动清理。
                       </p>
                       <p
                         v-if="claudeConfig.requestDetailBodyPreviewEnabled"
@@ -1209,31 +1209,6 @@
                         <i class="fas fa-exclamation-triangle mr-1"></i>
                         开启请求体预览会增加 Redis 存储压力
                       </p>
-                      <div
-                        class="mt-3 flex flex-col gap-2 rounded-lg border border-gray-200 bg-white/70 p-3 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300 sm:flex-row sm:items-center sm:justify-between"
-                      >
-                        <span>
-                          历史请求体预览可随时手动清理；清理仅影响已保存的历史预览，不影响当前开关对后续请求的行为。
-                        </span>
-                        <button
-                          class="inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
-                          :disabled="
-                            requestDetailBodyPreviewSaving || requestDetailBodyPreviewPurging
-                          "
-                          type="button"
-                          @click="handleRequestDetailBodyPreviewPurge"
-                        >
-                          <i
-                            class="mr-1.5"
-                            :class="
-                              requestDetailBodyPreviewPurging
-                                ? 'fas fa-spinner fa-spin'
-                                : 'fas fa-trash-alt'
-                            "
-                          ></i>
-                          {{ requestDetailBodyPreviewPurging ? '清理中...' : '清理历史预览' }}
-                        </button>
-                      </div>
                     </div>
 
                     <button
@@ -1244,7 +1219,7 @@
                           ? 'bg-cyan-500'
                           : 'bg-gray-200 dark:bg-gray-700'
                       "
-                      :disabled="requestDetailBodyPreviewSaving || requestDetailBodyPreviewPurging"
+                      :disabled="requestDetailBodyPreviewSaving"
                       role="switch"
                       type="button"
                       @click="handleRequestDetailBodyPreviewToggle"
@@ -2134,7 +2109,6 @@ const requestDetailRetentionInput = reactive({
   hours: REQUEST_DETAIL_RETENTION_DEFAULT_HOURS
 })
 const requestDetailBodyPreviewSaving = ref(false)
-const requestDetailBodyPreviewPurging = ref(false)
 
 const normalizeRetentionPart = (value) => {
   const parsed = Number.parseInt(value, 10)
@@ -2208,7 +2182,7 @@ const handleRequestDetailRetentionChange = () => {
 }
 
 const handleRequestDetailBodyPreviewToggle = async () => {
-  if (requestDetailBodyPreviewSaving.value || requestDetailBodyPreviewPurging.value) return
+  if (requestDetailBodyPreviewSaving.value) return
 
   const nextValue = !claudeConfig.value.requestDetailBodyPreviewEnabled
 
@@ -2221,50 +2195,6 @@ const handleRequestDetailBodyPreviewToggle = async () => {
     console.error(error)
   } finally {
     requestDetailBodyPreviewSaving.value = false
-  }
-}
-
-const handleRequestDetailBodyPreviewPurge = async () => {
-  if (requestDetailBodyPreviewSaving.value || requestDetailBodyPreviewPurging.value) return
-
-  try {
-    const statsResponse = await httpApis.getRequestDetailBodyPreviewStatsApi({
-      signal: abortController.value.signal
-    })
-
-    if (statsResponse?.success === false) {
-      showToast(statsResponse.message || '检查历史请求体预览失败', 'error')
-      return
-    }
-
-    const snapshotCount = Number(statsResponse?.data?.snapshotCount || 0)
-    if (snapshotCount <= 0) {
-      showToast('暂无历史请求体预览需要清理', 'success')
-      return
-    }
-
-    const confirmed = window.confirm(
-      `检测到当前仍有 ${snapshotCount} 条请求明细保存了请求体预览。\n清理后将仅移除历史请求体预览，保留请求明细摘要字段。\n\n是否继续？`
-    )
-    if (!confirmed) return
-
-    requestDetailBodyPreviewPurging.value = true
-    const purgeResponse = await httpApis.purgeRequestDetailBodyPreviewApi({
-      signal: abortController.value.signal
-    })
-
-    if (purgeResponse?.success === false) {
-      showToast(purgeResponse.message || '清理历史请求体预览失败', 'error')
-      return
-    }
-
-    showToast(purgeResponse?.message || '清理完毕', 'success')
-  } catch (error) {
-    if (error?.name === 'AbortError') return
-    showToast('清理历史请求体预览失败', 'error')
-    console.error(error)
-  } finally {
-    requestDetailBodyPreviewPurging.value = false
   }
 }
 

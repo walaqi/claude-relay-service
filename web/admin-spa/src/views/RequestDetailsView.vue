@@ -38,7 +38,7 @@
         </div>
 
         <div
-          v-if="!captureEnabled && !loading && records.length === 0"
+          v-if="!captureEnabled && !loading && records.length === 0 && !hasActiveFilters"
           class="rounded-2xl border border-dashed border-gray-300 bg-gray-50/80 p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800/50"
         >
           <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -50,16 +50,41 @@
                 到系统设置开启“请求明细采集”后，后台会开始记录新的请求摘要。历史请求不会回填。
               </p>
             </div>
-            <button
-              class="group relative inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500"
-              @click="goToSettings"
-            >
-              <span
-                class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-              ></span>
-              <i class="fas fa-cog relative text-blue-500" />
-              <span class="relative">前往系统设置</span>
-            </button>
+            <div class="flex flex-col gap-2 sm:flex-row">
+              <button
+                class="group relative inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500"
+                @click="goToSettings"
+              >
+                <span
+                  class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
+                ></span>
+                <i class="fas fa-cog relative text-blue-500" />
+                <span class="relative">前往系统设置</span>
+              </button>
+              <el-tooltip placement="top">
+                <template #content>
+                  <div class="max-w-xs text-xs leading-relaxed">
+                    清理所有已保存的历史请求体预览数据；仅影响历史预览，不影响当前请求体预览开关设置
+                  </div>
+                </template>
+                <button
+                  class="group relative inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500"
+                  :disabled="requestDetailBodyPreviewPurging"
+                  @click="handleRequestDetailBodyPreviewPurge"
+                >
+                  <span
+                    class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-red-500 to-orange-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
+                  ></span>
+                  <i
+                    :class="[
+                      'fas relative text-red-500',
+                      requestDetailBodyPreviewPurging ? 'fa-spinner fa-spin' : 'fa-trash-alt'
+                    ]"
+                  />
+                  <span class="relative">清理历史预览</span>
+                </button>
+              </el-tooltip>
+            </div>
           </div>
         </div>
 
@@ -284,6 +309,30 @@
                   />
                   <span class="relative">导出 CSV</span>
                 </button>
+
+                <el-tooltip placement="top">
+                  <template #content>
+                    <div class="max-w-xs text-xs leading-relaxed">
+                      清理所有已保存的历史请求体预览数据；仅影响历史预览，不影响当前请求体预览开关设置
+                    </div>
+                  </template>
+                  <button
+                    class="toolbar-action-button group relative flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500"
+                    :disabled="requestDetailBodyPreviewPurging"
+                    @click="handleRequestDetailBodyPreviewPurge"
+                  >
+                    <span
+                      class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-red-500 to-orange-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
+                    ></span>
+                    <i
+                      :class="[
+                        'fas relative text-red-500',
+                        requestDetailBodyPreviewPurging ? 'fa-spinner fa-spin' : 'fa-trash-alt'
+                      ]"
+                    />
+                    <span class="relative">清理历史预览</span>
+                  </button>
+                </el-tooltip>
               </div>
             </div>
           </div>
@@ -535,17 +584,24 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import dayjs from 'dayjs'
+import { debounce } from 'lodash-es'
 import { useRouter } from 'vue-router'
-import { getRequestDetailsApi } from '@/utils/http_apis'
+import {
+  getRequestDetailsApi,
+  getRequestDetailBodyPreviewStatsApi,
+  purgeRequestDetailBodyPreviewApi
+} from '@/utils/http_apis'
 import { showToast, formatDate, formatNumber } from '@/utils/tools'
 import RequestDetailModal from '@/components/admin/RequestDetailModal.vue'
 
 const router = useRouter()
 
+let fetchVersion = 0
 const loading = ref(false)
 const exporting = ref(false)
+const requestDetailBodyPreviewPurging = ref(false)
 const detailVisible = ref(false)
 const activeRequestId = ref('')
 const captureEnabled = ref(false)
@@ -571,6 +627,17 @@ const filters = reactive({
   model: '',
   endpoint: '',
   sortOrder: 'desc'
+})
+
+const hasActiveFilters = computed(() => {
+  return !!(
+    filters.keyword ||
+    filters.apiKeyId ||
+    filters.accountId ||
+    filters.model ||
+    filters.endpoint ||
+    (filters.dateRange && filters.dateRange.length === 2)
+  )
 })
 
 const summary = reactive({
@@ -666,7 +733,7 @@ const syncResponseState = (data) => {
   pagination.totalRecords = pageInfo.totalRecords || 0
 
   const filterEcho = data.filters || {}
-  filters.keyword = filterEcho.keyword || ''
+  // keyword 不回写：用户可能正在输入，回写会覆盖用户当前的输入
   filters.apiKeyId = filterEcho.apiKeyId || ''
   filters.accountId = filterEcho.accountId || ''
   filters.model = filterEcho.model || ''
@@ -701,18 +768,24 @@ const syncResponseState = (data) => {
 }
 
 const fetchRecords = async (page = pagination.currentPage) => {
+  debouncedKeywordFetch.cancel()
+  const version = ++fetchVersion
   loading.value = true
   try {
     const response = await getRequestDetailsApi(buildParams(page))
+    if (version !== fetchVersion) return
     if (response?.success === false) {
       showToast(response.message || '加载请求明细失败', 'error')
       return
     }
     syncResponseState(response.data || {})
   } catch (error) {
+    if (version !== fetchVersion) return
     showToast(`加载请求明细失败：${error.message || '未知错误'}`, 'error')
   } finally {
-    loading.value = false
+    if (version === fetchVersion) {
+      loading.value = false
+    }
   }
 }
 
@@ -741,6 +814,48 @@ const resetFilters = () => {
   filters.sortOrder = 'desc'
   pagination.currentPage = 1
   fetchRecords(1)
+  // resetFilters 同步写 filters.keyword = '' 会触发 keyword watcher 排一个新 debounce，
+  // 需要在 watcher 执行后（nextTick）取消它，避免多余请求和 loading 闪烁
+  nextTick(() => debouncedKeywordFetch.cancel())
+}
+
+const handleRequestDetailBodyPreviewPurge = async () => {
+  if (requestDetailBodyPreviewPurging.value) return
+
+  try {
+    const statsResponse = await getRequestDetailBodyPreviewStatsApi()
+
+    if (statsResponse?.success === false) {
+      showToast(statsResponse.message || '检查历史请求体预览失败', 'error')
+      return
+    }
+
+    const snapshotCount = Number(statsResponse?.data?.snapshotCount || 0)
+    if (snapshotCount <= 0) {
+      showToast('暂无历史请求体预览需要清理', 'success')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `检测到当前仍有 ${snapshotCount} 条请求明细保存了请求体预览。\n清理后将仅移除历史请求体预览，保留请求明细摘要字段。\n\n是否继续？`
+    )
+    if (!confirmed) return
+
+    requestDetailBodyPreviewPurging.value = true
+    const purgeResponse = await purgeRequestDetailBodyPreviewApi()
+
+    if (purgeResponse?.success === false) {
+      showToast(purgeResponse.message || '清理历史请求体预览失败', 'error')
+      return
+    }
+
+    showToast(purgeResponse?.message || '清理完毕', 'success')
+  } catch (error) {
+    showToast('清理历史请求体预览失败', 'error')
+    console.error(error)
+  } finally {
+    requestDetailBodyPreviewPurging.value = false
+  }
 }
 
 const goToSettings = () => router.push('/settings')
@@ -760,6 +875,7 @@ const exportCsv = async () => {
     const aggregated = []
     let page = 1
     let totalPages = 1
+    let totalRecords = 0
     const maxPages = 100
 
     while (page <= totalPages && page <= maxPages) {
@@ -770,7 +886,17 @@ const exportCsv = async () => {
       const payload = response.data || {}
       aggregated.push(...(payload.records || []))
       totalPages = payload.pagination?.totalPages || 1
+      if (page === 1) {
+        totalRecords = payload.pagination?.totalRecords || 0
+      }
       page += 1
+    }
+
+    if (totalPages > maxPages) {
+      showToast(
+        `数据量超过导出上限（已导出 ${aggregated.length} 条，共 ${totalRecords} 条），建议缩小筛选范围后重试`,
+        'warning'
+      )
     }
 
     if (aggregated.length === 0) {
@@ -862,16 +988,22 @@ const formatDuration = (value) => `${Number(value || 0)}ms`
 const formatPercent = (value) => `${Number(value || 0).toFixed(2)}%`
 const formatReasoning = (value) => value || '-'
 
+const debouncedKeywordFetch = debounce(() => {
+  pagination.currentPage = 1
+  fetchRecords(1)
+}, 300)
+
 watch(
-  () => [
-    filters.keyword,
-    filters.apiKeyId,
-    filters.accountId,
-    filters.model,
-    filters.endpoint,
-    filters.sortOrder
-  ],
+  () => filters.keyword,
   () => {
+    debouncedKeywordFetch()
+  }
+)
+
+watch(
+  () => [filters.apiKeyId, filters.accountId, filters.model, filters.endpoint, filters.sortOrder],
+  () => {
+    debouncedKeywordFetch.cancel()
     pagination.currentPage = 1
     fetchRecords(1)
   }

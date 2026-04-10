@@ -376,10 +376,13 @@ const fetchDetail = async () => {
     return
   }
 
+  const targetRequestId = props.requestId
+
   loading.value = true
   detail.value = null
   try {
-    const response = await getRequestDetailApi(props.requestId)
+    const response = await getRequestDetailApi(targetRequestId)
+    if (targetRequestId !== props.requestId || !props.show) return
     if (response?.success === false) {
       showToast(response.message || '加载请求详情失败', 'error')
       return
@@ -387,11 +390,14 @@ const fetchDetail = async () => {
     bodyPreviewEnabled.value = response.data?.bodyPreviewEnabled === true
     detail.value = response.data?.record || null
   } catch (error) {
+    if (targetRequestId !== props.requestId || !props.show) return
     detail.value = null
     bodyPreviewEnabled.value = false
     showToast(`加载请求详情失败：${error.message || '未知错误'}`, 'error')
   } finally {
-    loading.value = false
+    if (targetRequestId === props.requestId) {
+      loading.value = false
+    }
   }
 }
 
