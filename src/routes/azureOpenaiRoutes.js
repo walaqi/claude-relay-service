@@ -69,7 +69,14 @@ class AtomicUsageReporter {
     }
   }
 
-  async _performReport(requestId, usageData, apiKeyId, modelToRecord, accountId, requestMeta = null) {
+  async _performReport(
+    requestId,
+    usageData,
+    apiKeyId,
+    modelToRecord,
+    accountId,
+    requestMeta = null
+  ) {
     try {
       const inputTokens = usageData.prompt_tokens || usageData.input_tokens || 0
       const outputTokens = usageData.completion_tokens || usageData.output_tokens || 0

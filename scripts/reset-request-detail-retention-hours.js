@@ -74,8 +74,7 @@ async function resetRequestDetailRetentionHours() {
       port: Number.parseInt(process.env.REDIS_PORT, 10) || 6379,
       password: process.env.REDIS_PASSWORD || undefined,
       db: Number.parseInt(process.env.REDIS_DB, 10) || 0,
-      tls:
-        process.env.REDIS_ENABLE_TLS === 'true' || process.env.REDIS_TLS === 'true' ? {} : false,
+      tls: process.env.REDIS_ENABLE_TLS === 'true' || process.env.REDIS_TLS === 'true' ? {} : false,
       lazyConnect: true
     })
     await client.connect()

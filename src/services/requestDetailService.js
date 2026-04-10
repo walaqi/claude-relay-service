@@ -80,8 +80,12 @@ function formatDayKey(date) {
 
 function listDayKeys(startDate, endDate) {
   const keys = []
-  const cursor = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate()))
-  const endCursor = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate()))
+  const cursor = new Date(
+    Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate())
+  )
+  const endCursor = new Date(
+    Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate())
+  )
 
   while (cursor <= endCursor) {
     keys.push(`${REQUEST_DETAIL_DAY_INDEX_PREFIX}${formatDayKey(cursor)}`)
@@ -192,13 +196,16 @@ function updateAvailableFilterAccumulator(accumulator, record) {
 
 function finalizeAvailableFilters(accumulator) {
   return {
-    apiKeys: Array.from(accumulator.apiKeyMap.values()).sort((a, b) => a.name.localeCompare(b.name)),
-    accounts: Array.from(accumulator.accountMap.values()).sort((a, b) => a.name.localeCompare(b.name)),
+    apiKeys: Array.from(accumulator.apiKeyMap.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    ),
+    accounts: Array.from(accumulator.accountMap.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    ),
     models: Array.from(accumulator.modelSet).sort((a, b) => a.localeCompare(b)),
     endpoints: Array.from(accumulator.endpointSet).sort((a, b) => a.localeCompare(b)),
     dateRange: {
-      earliest:
-        accumulator.earliest !== null ? new Date(accumulator.earliest).toISOString() : null,
+      earliest: accumulator.earliest !== null ? new Date(accumulator.earliest).toISOString() : null,
       latest: accumulator.latest !== null ? new Date(accumulator.latest).toISOString() : null
     }
   }
@@ -330,7 +337,8 @@ class RequestDetailService {
     const cacheReadTokens = normalizeNumber(detail.cacheReadTokens)
     const cacheCreateTokens = normalizeNumber(detail.cacheCreateTokens)
     const totalTokens =
-      normalizeNumber(detail.totalTokens) || inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens
+      normalizeNumber(detail.totalTokens) ||
+      inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens
     const statusCode = normalizeNumber(detail.statusCode)
     const cost = normalizeNumber(detail.cost, 6)
     const realCost = normalizeNumber(detail.realCost, 6)
@@ -561,7 +569,10 @@ class RequestDetailService {
 
     const preferredService = accountServices[normalizedType]
     const servicesToTry = preferredService
-      ? [[normalizedType, preferredService], ...Object.entries(accountServices).filter(([type]) => type !== normalizedType)]
+      ? [
+          [normalizedType, preferredService],
+          ...Object.entries(accountServices).filter(([type]) => type !== normalizedType)
+        ]
       : Object.entries(accountServices)
 
     for (const [type, service] of servicesToTry) {
@@ -599,14 +610,21 @@ class RequestDetailService {
       const cacheMetrics = getRequestDetailCacheMetrics(record)
       const reasoningInfo = resolveRequestDetailReasoning(record)
       const apiKeyName = await this._getApiKeyName(record.apiKeyId, apiKeyCache)
-      const accountInfo = await this._resolveAccountInfo(record.accountId, record.accountType, accountCache)
+      const accountInfo = await this._resolveAccountInfo(
+        record.accountId,
+        record.accountType,
+        accountCache
+      )
 
       enriched.push({
         ...record,
         apiKeyName: apiKeyName || record.apiKeyId || '未知 Key',
         accountName: accountInfo?.accountName || record.accountId || '未知账户',
         accountType: accountInfo?.accountType || record.accountType || 'unknown',
-        accountTypeName: accountInfo?.accountTypeName || accountTypeNames[record.accountType] || accountTypeNames.unknown,
+        accountTypeName:
+          accountInfo?.accountTypeName ||
+          accountTypeNames[record.accountType] ||
+          accountTypeNames.unknown,
         isOpenAIRelated: cacheMetrics.isOpenAIRelated,
         cacheCreateNotApplicable: cacheMetrics.cacheCreateNotApplicable,
         cacheHitRate: cacheMetrics.rate,
@@ -641,7 +659,11 @@ class RequestDetailService {
       record.method
     ]
 
-    return haystacks.some((value) => String(value || '').toLowerCase().includes(normalizedKeyword))
+    return haystacks.some((value) =>
+      String(value || '')
+        .toLowerCase()
+        .includes(normalizedKeyword)
+    )
   }
 
   async listRequestDetails(filters = {}) {
