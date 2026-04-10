@@ -194,6 +194,59 @@ function updateAvailableFilterAccumulator(accumulator, record) {
   }
 }
 
+function updateAvailableFilterAccumulatorRaw(accumulator, record) {
+  if (record.apiKeyId && !accumulator.apiKeyMap.has(record.apiKeyId)) {
+    accumulator.apiKeyMap.set(record.apiKeyId, {
+      id: record.apiKeyId,
+      name: record.apiKeyId
+    })
+  }
+
+  if (record.accountId && !accumulator.accountMap.has(record.accountId)) {
+    accumulator.accountMap.set(record.accountId, {
+      id: record.accountId,
+      name: record.accountId,
+      accountType: record.accountType || 'unknown',
+      accountTypeName: accountTypeNames[record.accountType] || accountTypeNames.unknown
+    })
+  }
+
+  if (record.model) {
+    accumulator.modelSet.add(record.model)
+  }
+
+  if (record.endpoint) {
+    accumulator.endpointSet.add(record.endpoint)
+  }
+
+  const ts = toMillis(record.timestamp)
+  if (ts !== null) {
+    if (accumulator.earliest === null || ts < accumulator.earliest) {
+      accumulator.earliest = ts
+    }
+    if (accumulator.latest === null || ts > accumulator.latest) {
+      accumulator.latest = ts
+    }
+  }
+}
+
+function restoreRecordTimestamp(record, fallbackTimestampMs) {
+  if (!record) {
+    return null
+  }
+
+  if (toMillis(record.timestamp) !== null) {
+    return record
+  }
+
+  const timestampMs = Number(fallbackTimestampMs)
+  if (Number.isFinite(timestampMs)) {
+    record.timestamp = new Date(timestampMs).toISOString()
+  }
+
+  return record
+}
+
 function finalizeAvailableFilters(accumulator) {
   return {
     apiKeys: Array.from(accumulator.apiKeyMap.values()).sort((a, b) =>
@@ -577,7 +630,10 @@ class RequestDetailService {
 
     for (const [type, service] of servicesToTry) {
       try {
-        const account = await service.getAccount(accountId)
+        let account = await service.getAccount(accountId)
+        if (account && typeof account === 'object' && 'success' in account) {
+          account = account.success ? account.data : null
+        }
         if (account) {
           const info = {
             accountId,
@@ -601,6 +657,87 @@ class RequestDetailService {
     }
     cache.set(cacheKey, fallback)
     return fallback
+  }
+
+  async _resolveFilterDisplayNames(accumulator) {
+    const apiKeyCache = new Map()
+    const accountCache = new Map()
+
+    for (const [keyId, entry] of accumulator.apiKeyMap) {
+      const name = await this._getApiKeyName(keyId, apiKeyCache)
+      if (name) {
+        entry.name = name
+      }
+    }
+
+    for (const [accountId, entry] of accumulator.accountMap) {
+      const accountInfo = await this._resolveAccountInfo(accountId, entry.accountType, accountCache)
+      if (accountInfo) {
+        entry.name = accountInfo.accountName
+        entry.accountTypeName = accountInfo.accountTypeName
+      }
+    }
+  }
+
+  async _findRequestTimestampInRange(requestId, startDate, endDate, client = redis.getClient()) {
+    if (!requestId || !client) {
+      return null
+    }
+
+    const dayKeys = listDayKeys(startDate, endDate)
+    if (dayKeys.length === 0) {
+      return null
+    }
+
+    const startMs = startDate.getTime()
+    const endMs = endDate.getTime()
+
+    if (typeof client.pipeline === 'function') {
+      const pipeline = client.pipeline()
+      dayKeys.forEach((dayKey) => {
+        pipeline.zscore(dayKey, requestId)
+      })
+
+      const results = await pipeline.exec()
+      if (Array.isArray(results)) {
+        for (let index = 0; index < results.length; index += 1) {
+          const [error, score] = results[index] || []
+          if (error) {
+            logger.debug(
+              `⚠️ Failed to resolve request detail timestamp from ${dayKeys[index]}: ${error.message}`
+            )
+            continue
+          }
+
+          const timestampMs = Number(score)
+          if (Number.isFinite(timestampMs) && timestampMs >= startMs && timestampMs <= endMs) {
+            return timestampMs
+          }
+        }
+      }
+
+      return null
+    }
+
+    if (typeof client.zscore !== 'function') {
+      return null
+    }
+
+    for (const dayKey of dayKeys) {
+      try {
+        const score = await client.zscore(dayKey, requestId)
+        const timestampMs = Number(score)
+        if (Number.isFinite(timestampMs) && timestampMs >= startMs && timestampMs <= endMs) {
+          return timestampMs
+        }
+      } catch (error) {
+        logger.debug(
+          `⚠️ Failed to resolve request detail timestamp from ${dayKey}: ${error.message}`
+        )
+      }
+    }
+
+    return null
   }
 
   async _enrichRecords(records = [], apiKeyCache = new Map(), accountCache = new Map()) {
@@ -712,69 +849,129 @@ class RequestDetailService {
 
     const availableFilterAccumulator = createAvailableFilterAccumulator()
     const summaryAccumulator = createSummaryAccumulator()
-    const apiKeyCache = new Map()
-    const accountCache = new Map()
     const client = redis.getClient()
     const requestedPageStart = (page - 1) * pageSize
     const requestedPageEnd = requestedPageStart + pageSize
     const pageRecords = []
     let totalRecords = 0
 
-    for (
-      let startIndex = 0;
-      startIndex < requestPointers.length;
-      startIndex += REQUEST_DETAIL_QUERY_BATCH_SIZE
-    ) {
-      const pointerBatch = requestPointers.slice(
-        startIndex,
-        startIndex + REQUEST_DETAIL_QUERY_BATCH_SIZE
-      )
-      const itemKeys = pointerBatch.map(
-        ({ requestId }) => `${REQUEST_DETAIL_ITEM_PREFIX}${requestId}`
-      )
-      const rawItems = await client.mget(itemKeys)
-      const parsedBatch = rawItems
-        .map((rawItem, index) => {
-          const parsed = safeJsonParse(rawItem)
-          if (parsed && !parsed.timestamp) {
-            parsed.timestamp = new Date(pointerBatch[index].timestampMs).toISOString()
+    const hasKeyword = Boolean(filters.keyword?.trim())
+
+    if (hasKeyword) {
+      // keyword 搜索需要 enriched 字段（apiKeyName, accountName），走全量 enrichment 路径
+      const apiKeyCache = new Map()
+      const accountCache = new Map()
+
+      for (
+        let startIndex = 0;
+        startIndex < requestPointers.length;
+        startIndex += REQUEST_DETAIL_QUERY_BATCH_SIZE
+      ) {
+        const pointerBatch = requestPointers.slice(
+          startIndex,
+          startIndex + REQUEST_DETAIL_QUERY_BATCH_SIZE
+        )
+        const itemKeys = pointerBatch.map(
+          ({ requestId }) => `${REQUEST_DETAIL_ITEM_PREFIX}${requestId}`
+        )
+        const rawItems = await client.mget(itemKeys)
+        const parsedBatch = rawItems
+          .map((rawItem, index) =>
+            restoreRecordTimestamp(safeJsonParse(rawItem), pointerBatch[index].timestampMs)
+          )
+          .filter(Boolean)
+
+        const enrichedBatch = await this._enrichRecords(parsedBatch, apiKeyCache, accountCache)
+
+        for (const record of enrichedBatch) {
+          updateAvailableFilterAccumulator(availableFilterAccumulator, record)
+
+          if (filters.apiKeyId && record.apiKeyId !== filters.apiKeyId) {
+            continue
           }
-          return parsed
-        })
-        .filter(Boolean)
+          if (filters.accountId && record.accountId !== filters.accountId) {
+            continue
+          }
+          if (filters.model && record.model !== filters.model) {
+            continue
+          }
+          if (filters.endpoint && record.endpoint !== filters.endpoint) {
+            continue
+          }
+          if (!this._matchesKeyword(record, filters.keyword)) {
+            continue
+          }
 
-      const enrichedBatch = await this._enrichRecords(parsedBatch, apiKeyCache, accountCache)
+          updateSummaryAccumulator(summaryAccumulator, record)
 
-      for (const record of enrichedBatch) {
-        updateAvailableFilterAccumulator(availableFilterAccumulator, record)
+          if (totalRecords >= requestedPageStart && totalRecords < requestedPageEnd) {
+            pageRecords.push({
+              ...record,
+              requestBodySnapshot: undefined
+            })
+          }
 
-        if (filters.apiKeyId && record.apiKeyId !== filters.apiKeyId) {
-          continue
+          totalRecords += 1
         }
-        if (filters.accountId && record.accountId !== filters.accountId) {
-          continue
-        }
-        if (filters.model && record.model !== filters.model) {
-          continue
-        }
-        if (filters.endpoint && record.endpoint !== filters.endpoint) {
-          continue
-        }
-        if (!this._matchesKeyword(record, filters.keyword)) {
-          continue
-        }
-
-        updateSummaryAccumulator(summaryAccumulator, record)
-
-        if (totalRecords >= requestedPageStart && totalRecords < requestedPageEnd) {
-          pageRecords.push({
-            ...record,
-            requestBodySnapshot: undefined
-          })
-        }
-
-        totalRecords += 1
       }
+    } else {
+      // 无 keyword：延迟 enrichment，只对当前页记录做 enrichment
+      const pageRawRecords = []
+
+      for (
+        let startIndex = 0;
+        startIndex < requestPointers.length;
+        startIndex += REQUEST_DETAIL_QUERY_BATCH_SIZE
+      ) {
+        const pointerBatch = requestPointers.slice(
+          startIndex,
+          startIndex + REQUEST_DETAIL_QUERY_BATCH_SIZE
+        )
+        const itemKeys = pointerBatch.map(
+          ({ requestId }) => `${REQUEST_DETAIL_ITEM_PREFIX}${requestId}`
+        )
+        const rawItems = await client.mget(itemKeys)
+        const parsedBatch = rawItems
+          .map((rawItem, index) =>
+            restoreRecordTimestamp(safeJsonParse(rawItem), pointerBatch[index].timestampMs)
+          )
+          .filter(Boolean)
+
+        for (const record of parsedBatch) {
+          updateAvailableFilterAccumulatorRaw(availableFilterAccumulator, record)
+
+          if (filters.apiKeyId && record.apiKeyId !== filters.apiKeyId) {
+            continue
+          }
+          if (filters.accountId && record.accountId !== filters.accountId) {
+            continue
+          }
+          if (filters.model && record.model !== filters.model) {
+            continue
+          }
+          if (filters.endpoint && record.endpoint !== filters.endpoint) {
+            continue
+          }
+
+          updateSummaryAccumulator(summaryAccumulator, record)
+
+          if (totalRecords >= requestedPageStart && totalRecords < requestedPageEnd) {
+            pageRawRecords.push(record)
+          }
+
+          totalRecords += 1
+        }
+      }
+
+      const enrichedPageRecords = await this._enrichRecords(pageRawRecords)
+      for (const record of enrichedPageRecords) {
+        pageRecords.push({
+          ...record,
+          requestBodySnapshot: undefined
+        })
+      }
+
+      await this._resolveFilterDisplayNames(availableFilterAccumulator)
     }
 
     const totalPages = totalRecords > 0 ? Math.ceil(totalRecords / pageSize) : 0
@@ -830,6 +1027,32 @@ class RequestDetailService {
     const raw = await client.get(`${REQUEST_DETAIL_ITEM_PREFIX}${requestId}`)
     const parsed = safeJsonParse(raw)
     if (!parsed) {
+      return {
+        captureEnabled: settings.captureEnabled,
+        retentionHours: settings.retentionHours,
+        bodyPreviewEnabled: settings.bodyPreviewEnabled,
+        record: null
+      }
+    }
+
+    const now = new Date()
+    const retentionStart = new Date(now.getTime() - settings.retentionHours * 3600 * 1000)
+    let recordMs = toMillis(parsed.timestamp)
+    if (recordMs === null) {
+      recordMs = await this._findRequestTimestampInRange(requestId, retentionStart, now, client)
+      if (recordMs === null) {
+        return {
+          captureEnabled: settings.captureEnabled,
+          retentionHours: settings.retentionHours,
+          bodyPreviewEnabled: settings.bodyPreviewEnabled,
+          record: null
+        }
+      }
+
+      parsed.timestamp = new Date(recordMs).toISOString()
+    }
+
+    if (recordMs < retentionStart.getTime()) {
       return {
         captureEnabled: settings.captureEnabled,
         retentionHours: settings.retentionHours,
