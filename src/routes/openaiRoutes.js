@@ -15,6 +15,10 @@ const ProxyHelper = require('../utils/proxyHelper')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { IncrementalSSEParser } = require('../utils/sseParser')
 const { getSafeMessage } = require('../utils/errorSanitizer')
+const {
+  createRequestDetailMeta,
+  extractOpenAICacheReadTokens
+} = require('../utils/requestDetailHelper')
 
 // Codex CLI 系统提示词（非 Codex CLI 客户端请求时注入，统一端点也使用）
 const CODEX_CLI_INSTRUCTIONS =
@@ -623,7 +627,7 @@ const handleResponses = async (req, res) => {
         if (usageData) {
           const totalInputTokens = usageData.input_tokens || usageData.prompt_tokens || 0
           const outputTokens = usageData.output_tokens || usageData.completion_tokens || 0
-          const cacheReadTokens = usageData.input_tokens_details?.cached_tokens || 0
+          const cacheReadTokens = extractOpenAICacheReadTokens(usageData)
           // 计算实际输入token（总输入减去缓存部分）
           const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
 
@@ -636,7 +640,12 @@ const handleResponses = async (req, res) => {
             actualModel,
             accountId,
             'openai',
-            req._serviceTier
+            req._serviceTier,
+            createRequestDetailMeta(req, {
+              requestBody: req.body,
+              stream: false,
+              statusCode: upstream.status
+            })
           )
 
           logger.info(
@@ -738,7 +747,7 @@ const handleResponses = async (req, res) => {
         try {
           const totalInputTokens = usageData.input_tokens || 0
           const outputTokens = usageData.output_tokens || 0
-          const cacheReadTokens = usageData.input_tokens_details?.cached_tokens || 0
+          const cacheReadTokens = extractOpenAICacheReadTokens(usageData)
           // 计算实际输入token（总输入减去缓存部分）
           const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
 
@@ -754,7 +763,12 @@ const handleResponses = async (req, res) => {
             modelToRecord,
             accountId,
             'openai',
-            req._serviceTier
+            req._serviceTier,
+            createRequestDetailMeta(req, {
+              requestBody: req.body,
+              stream: true,
+              statusCode: res.statusCode
+            })
           )
 
           logger.info(

@@ -1765,6 +1765,7 @@ const requestLogger = (req, res, next) => {
 
   // 添加请求ID到请求对象
   req.requestId = requestId
+  req.requestStartedAt = start
   res.setHeader('X-Request-ID', requestId)
 
   // 获取客户端信息
