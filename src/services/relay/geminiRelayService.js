@@ -106,7 +106,13 @@ function convertGeminiResponse(geminiResponse, model, stream = false) {
 }
 
 // 处理流式响应
-async function* handleStreamResponse(response, model, apiKeyId, accountId = null, requestMeta = null) {
+async function* handleStreamResponse(
+  response,
+  model,
+  apiKeyId,
+  accountId = null,
+  requestMeta = null
+) {
   let buffer = ''
   let totalUsage = {
     promptTokenCount: 0,

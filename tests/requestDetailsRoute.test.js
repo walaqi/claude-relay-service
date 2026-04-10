@@ -3,9 +3,13 @@ const mockRouter = {
   post: jest.fn()
 }
 
-jest.mock('express', () => ({
-  Router: () => mockRouter
-}), { virtual: true })
+jest.mock(
+  'express',
+  () => ({
+    Router: () => mockRouter
+  }),
+  { virtual: true }
+)
 
 jest.mock('../src/middleware/auth', () => ({
   authenticateAdmin: jest.fn((_req, _res, next) => next())
