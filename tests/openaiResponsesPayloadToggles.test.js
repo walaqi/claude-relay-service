@@ -1,0 +1,325 @@
+const crypto = require('crypto')
+
+const mockRouter = {
+  get: jest.fn(),
+  post: jest.fn()
+}
+
+jest.mock(
+  'express',
+  () => ({
+    Router: () => mockRouter
+  }),
+  { virtual: true }
+)
+
+jest.mock(
+  '../config/config',
+  () => ({
+    requestTimeout: 1000
+  }),
+  { virtual: true }
+)
+
+jest.mock('../src/middleware/auth', () => ({
+  authenticateApiKey: jest.fn((_req, _res, next) => next())
+}))
+
+jest.mock('axios', () => ({
+  post: jest.fn()
+}))
+
+jest.mock('../src/services/scheduler/unifiedOpenAIScheduler', () => ({
+  selectAccountForApiKey: jest.fn(),
+  markAccountRateLimited: jest.fn(),
+  isAccountRateLimited: jest.fn().mockResolvedValue(false),
+  removeAccountRateLimit: jest.fn(),
+  markAccountUnauthorized: jest.fn()
+}))
+
+jest.mock('../src/services/account/openaiAccountService', () => ({
+  getAccount: jest.fn(),
+  decrypt: jest.fn(),
+  isTokenExpired: jest.fn(() => false),
+  refreshAccountToken: jest.fn(),
+  updateCodexUsageSnapshot: jest.fn()
+}))
+
+jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
+  getAccount: jest.fn()
+}))
+
+jest.mock('../src/services/relay/openaiResponsesRelayService', () => ({
+  handleRequest: jest.fn()
+}))
+
+jest.mock('../src/services/apiKeyService', () => ({
+  hasPermission: jest.fn(() => true),
+  recordUsage: jest.fn()
+}))
+
+jest.mock('../src/models/redis', () => ({
+  getUsageStats: jest.fn()
+}))
+
+jest.mock('../src/utils/logger', () => ({
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn(),
+  api: jest.fn(),
+  security: jest.fn()
+}))
+
+jest.mock('../src/utils/proxyHelper', () => ({
+  createProxyAgent: jest.fn(() => null),
+  getProxyDescription: jest.fn(() => 'none')
+}))
+
+jest.mock('../src/utils/rateLimitHelper', () => ({
+  updateRateLimitCounters: jest.fn()
+}))
+
+jest.mock('../src/utils/sseParser', () => ({
+  IncrementalSSEParser: jest.fn().mockImplementation(() => ({
+    feed: jest.fn(() => []),
+    getRemaining: jest.fn(() => '')
+  }))
+}))
+
+jest.mock('../src/utils/errorSanitizer', () => ({
+  getSafeMessage: jest.fn((error) => error?.message || 'error')
+}))
+
+jest.mock('../src/utils/requestDetailHelper', () => ({
+  createRequestDetailMeta: jest.fn(() => null),
+  extractOpenAICacheReadTokens: jest.fn(() => 0)
+}))
+
+const unifiedOpenAIScheduler = require('../src/services/scheduler/unifiedOpenAIScheduler')
+const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
+const openaiResponsesRelayService = require('../src/services/relay/openaiResponsesRelayService')
+const openaiRoutes = require('../src/routes/openaiRoutes')
+
+function createHash(value) {
+  return crypto.createHash('sha256').update(value).digest('hex')
+}
+
+function createReq({
+  path = '/v1/responses',
+  body = {},
+  userAgent = 'my-client/1.0',
+  apiKeyOverrides = {},
+  fromUnifiedEndpoint = false
+} = {}) {
+  return {
+    method: 'POST',
+    path,
+    originalUrl: `/openai${path}`,
+    headers: {
+      'user-agent': userAgent
+    },
+    body: JSON.parse(JSON.stringify(body)),
+    apiKey: {
+      id: 'key_1',
+      permissions: ['openai'],
+      enableOpenAIResponsesCodexAdaptation: true,
+      enableOpenAIResponsesPayloadRules: false,
+      openaiResponsesPayloadRules: [],
+      ...apiKeyOverrides
+    },
+    _fromUnifiedEndpoint: fromUnifiedEndpoint
+  }
+}
+
+function createRes() {
+  const res = {
+    statusCode: 200,
+    headers: {},
+    destroyed: false,
+    writableEnded: false,
+    headersSent: false,
+    status: jest.fn((code) => {
+      res.statusCode = code
+      return res
+    }),
+    json: jest.fn((payload) => {
+      res.payload = payload
+      return res
+    }),
+    setHeader: jest.fn((key, value) => {
+      res.headers[key] = value
+    }),
+    set: jest.fn((key, value) => {
+      res.headers[key] = value
+      return res
+    })
+  }
+  return res
+}
+
+describe('openai responses payload toggles', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+      accountId: 'resp-1',
+      accountType: 'openai-responses'
+    })
+
+    openaiResponsesAccountService.getAccount.mockResolvedValue({
+      id: 'resp-1',
+      name: 'Responses Account',
+      apiKey: 'sk-responses'
+    })
+
+    openaiResponsesRelayService.handleRequest.mockResolvedValue({ ok: true })
+  })
+
+  test('passes standard responses through unchanged when both toggles are off', async () => {
+    const req = createReq({
+      body: {
+        model: 'gpt-5-2025-08-07',
+        temperature: 0.2,
+        service_tier: 'priority',
+        prompt_cache_key: 'session-a'
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(req.body).toEqual({
+      model: 'gpt-5-2025-08-07',
+      temperature: 0.2,
+      service_tier: 'priority',
+      prompt_cache_key: 'session-a'
+    })
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('session-a'),
+      'gpt-5-2025-08-07'
+    )
+  })
+
+  test('applies Codex adaptation only when adaptation toggle is on', async () => {
+    const req = createReq({
+      body: {
+        model: 'gpt-5-2025-08-07',
+        temperature: 0.2,
+        service_tier: 'priority',
+        prompt_cache_key: 'session-b'
+      }
+    })
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(req.body.model).toBe('gpt-5')
+    expect(req.body.instructions).toBe(openaiRoutes.CODEX_CLI_INSTRUCTIONS)
+    expect(req.body.temperature).toBeUndefined()
+    expect(req.body.service_tier).toBeUndefined()
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('session-b'),
+      'gpt-5'
+    )
+  })
+
+  test('applies payload rules directly on the original payload when adaptation is off', async () => {
+    const req = createReq({
+      body: {
+        model: 'gpt-4.1',
+        temperature: 0.5,
+        prompt_cache_key: 'old-key',
+        text: { format: {} }
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: true,
+        openaiResponsesPayloadRules: [
+          { path: 'model', valueType: 'string', value: 'gpt-5' },
+          { path: 'prompt_cache_key', valueType: 'string', value: 'new-key' },
+          { path: 'text.format.type', valueType: 'string', value: 'json_schema' }
+        ]
+      }
+    })
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(req.body).toEqual({
+      model: 'gpt-5',
+      temperature: 0.5,
+      prompt_cache_key: 'new-key',
+      text: {
+        format: {
+          type: 'json_schema'
+        }
+      }
+    })
+    expect(req.body.instructions).toBeUndefined()
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('new-key'),
+      'gpt-5'
+    )
+  })
+
+  test('applies payload rules after Codex adaptation when both toggles are on', async () => {
+    const req = createReq({
+      body: {
+        model: 'gpt-5-2025-08-07',
+        prompt_cache_key: 'legacy-key',
+        temperature: 0.2,
+        instructions: 'raw'
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: true,
+        enableOpenAIResponsesPayloadRules: true,
+        openaiResponsesPayloadRules: [
+          { path: 'model', valueType: 'string', value: 'gpt-5-codex' },
+          { path: 'instructions', valueType: 'string', value: 'custom instructions' },
+          { path: 'prompt_cache_key', valueType: 'string', value: 'rule-key' }
+        ]
+      }
+    })
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(req.body.model).toBe('gpt-5-codex')
+    expect(req.body.instructions).toBe('custom instructions')
+    expect(req.body.temperature).toBeUndefined()
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('rule-key'),
+      'gpt-5-codex'
+    )
+  })
+
+  test('does not apply the new rule flow to compact responses routes', async () => {
+    const req = createReq({
+      path: '/v1/responses/compact',
+      body: {
+        model: 'o1-mini',
+        prompt_cache_key: 'compact-key',
+        temperature: 0.1
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: true,
+        openaiResponsesPayloadRules: [
+          { path: 'model', valueType: 'string', value: 'gpt-5' },
+          { path: 'prompt_cache_key', valueType: 'string', value: 'rule-key' }
+        ]
+      }
+    })
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(req.body.model).toBe('o1-mini')
+    expect(req.body.prompt_cache_key).toBe('compact-key')
+    expect(req.body.instructions).toBe(openaiRoutes.CODEX_CLI_INSTRUCTIONS)
+  })
+})

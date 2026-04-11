@@ -19,6 +19,7 @@ const {
   createRequestDetailMeta,
   extractOpenAICacheReadTokens
 } = require('../utils/requestDetailHelper')
+const requestBodyRuleService = require('../services/requestBodyRuleService')
 
 // Codex CLI 系统提示词（非 Codex CLI 客户端请求时注入，统一端点也使用）
 const CODEX_CLI_INSTRUCTIONS =
@@ -76,6 +77,57 @@ function extractCodexUsageHeaders(headers) {
 
   const hasData = Object.values(snapshot).some((value) => value !== null)
   return hasData ? snapshot : null
+}
+
+function isCompactResponsesRoute(req) {
+  return (
+    req.path === '/responses/compact' ||
+    req.path === '/v1/responses/compact' ||
+    (req.originalUrl && req.originalUrl.includes('/responses/compact'))
+  )
+}
+
+function isStandardResponsesRoute(req) {
+  if (req._fromUnifiedEndpoint) {
+    return false
+  }
+
+  return req.path === '/responses' || req.path === '/v1/responses'
+}
+
+function normalizeGpt5ModelForCodex(body = {}) {
+  const requestedModel = body?.model || null
+  const isCodexModel =
+    typeof requestedModel === 'string' && requestedModel.toLowerCase().includes('codex')
+
+  if (requestedModel && requestedModel.startsWith('gpt-5-') && !isCodexModel) {
+    logger.info(`📝 Model ${requestedModel} detected, normalizing to gpt-5 for Codex API`)
+    body.model = 'gpt-5'
+    return 'gpt-5'
+  }
+
+  return requestedModel
+}
+
+function applyCodexCliAdaptation(body = {}) {
+  const fieldsToRemove = [
+    'temperature',
+    'top_p',
+    'max_output_tokens',
+    'user',
+    'text_formatting',
+    'truncation',
+    'text',
+    'service_tier',
+    'prompt_cache_retention',
+    'safety_identifier'
+  ]
+
+  fieldsToRemove.forEach((field) => {
+    delete body[field]
+  })
+
+  body.instructions = CODEX_CLI_INSTRUCTIONS
 }
 
 async function applyRateLimitTracking(
@@ -255,7 +307,53 @@ const handleResponses = async (req, res) => {
       })
     }
 
-    // 从请求头或请求体中提取会话 ID
+    // 判断是否为 Codex CLI 的请求（基于 User-Agent）
+    // 支持: codex_vscode, codex_cli_rs, codex_exec (非交互式/脚本模式)
+    const userAgent = req.headers['user-agent'] || ''
+    const codexCliPattern = /^(codex_vscode|codex_cli_rs|codex_exec)\/[\d.]+/i
+    const isCodexCLI = codexCliPattern.test(userAgent)
+
+    // 提取 service_tier 用于后续费用计算（在字段被移除前保存）
+    req._serviceTier = req.body?.service_tier || null
+
+    const standardResponsesRoute = isStandardResponsesRoute(req)
+    const compactRoute = isCompactResponsesRoute(req)
+    const shouldUseToggleControlledFlow = standardResponsesRoute && !compactRoute
+
+    if (shouldUseToggleControlledFlow) {
+      const shouldApplyCodexAdaptation =
+        apiKeyData.enableOpenAIResponsesCodexAdaptation === true && !isCodexCLI
+      const shouldApplyPayloadRules = apiKeyData.enableOpenAIResponsesPayloadRules === true
+
+      if (shouldApplyCodexAdaptation) {
+        normalizeGpt5ModelForCodex(req.body)
+        applyCodexCliAdaptation(req.body)
+        logger.info('📝 Standard Responses request applied Codex CLI adaptation')
+      } else if (isCodexCLI) {
+        logger.info('✅ Codex CLI request detected, forwarding current payload')
+      } else {
+        logger.info('📦 Standard Responses request is passing through without Codex adaptation')
+      }
+
+      if (shouldApplyPayloadRules) {
+        req.body = requestBodyRuleService.applyRules(
+          req.body,
+          apiKeyData.openaiResponsesPayloadRules
+        )
+        logger.info('🧩 Standard Responses request applied API key payload rules')
+      }
+    } else {
+      normalizeGpt5ModelForCodex(req.body)
+
+      if (!isCodexCLI && !req._fromUnifiedEndpoint) {
+        applyCodexCliAdaptation(req.body)
+        logger.info('📝 Non-Codex CLI request detected, applying Codex CLI adaptation')
+      } else {
+        logger.info('✅ Codex CLI request detected, forwarding as-is')
+      }
+    }
+
+    // 从最终请求体中提取模型、会话 ID 和流式标志
     // NOTE: For some clients, prompt_cache_key is the only stable per-session key.
     const sessionId =
       req.headers['session_id'] ||
@@ -267,55 +365,8 @@ const handleResponses = async (req, res) => {
 
     sessionHash = sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : null
 
-    // 从请求体中提取模型和流式标志
-    let requestedModel = req.body?.model || null
-    const isCodexModel =
-      typeof requestedModel === 'string' && requestedModel.toLowerCase().includes('codex')
-
-    // 如果模型是 gpt-5 开头且后面还有内容（如 gpt-5-2025-08-07），并且不是 Codex 系列，则覆盖为 gpt-5
-    if (requestedModel && requestedModel.startsWith('gpt-5-') && !isCodexModel) {
-      logger.info(`📝 Model ${requestedModel} detected, normalizing to gpt-5 for Codex API`)
-      requestedModel = 'gpt-5'
-      req.body.model = 'gpt-5' // 同时更新请求体中的模型
-    }
-
+    const requestedModel = req.body?.model || null
     const isStream = req.body?.stream !== false // 默认为流式（兼容现有行为）
-
-    // 判断是否为 Codex CLI 的请求（基于 User-Agent）
-    // 支持: codex_vscode, codex_cli_rs, codex_exec (非交互式/脚本模式)
-    const userAgent = req.headers['user-agent'] || ''
-    const codexCliPattern = /^(codex_vscode|codex_cli_rs|codex_exec)\/[\d.]+/i
-    const isCodexCLI = codexCliPattern.test(userAgent)
-
-    // 提取 service_tier 用于后续费用计算（在字段被移除前保存）
-    req._serviceTier = req.body?.service_tier || null
-
-    // 如果不是 Codex CLI 请求且不是来自 unified 端点（已完成格式转换），则进行适配
-    if (!isCodexCLI && !req._fromUnifiedEndpoint) {
-      // 移除不需要的请求体字段
-      const fieldsToRemove = [
-        'temperature',
-        'top_p',
-        'max_output_tokens',
-        'user',
-        'text_formatting',
-        'truncation',
-        'text',
-        'service_tier',
-        'prompt_cache_retention',
-        'safety_identifier'
-      ]
-      fieldsToRemove.forEach((field) => {
-        delete req.body[field]
-      })
-
-      // 设置固定的 Codex CLI instructions
-      req.body.instructions = CODEX_CLI_INSTRUCTIONS
-
-      logger.info('📝 Non-Codex CLI request detected, applying Codex CLI adaptation')
-    } else {
-      logger.info('✅ Codex CLI request detected, forwarding as-is')
-    }
 
     // 使用调度器选择账户
     ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
@@ -341,19 +392,13 @@ const handleResponses = async (req, res) => {
       }
     }
 
-    // 判断是否访问 compact 端点
-    const isCompactRoute =
-      req.path === '/responses/compact' ||
-      req.path === '/v1/responses/compact' ||
-      (req.originalUrl && req.originalUrl.includes('/responses/compact'))
-
     // 覆盖或新增必要头部
     headers['authorization'] = `Bearer ${accessToken}`
     headers['chatgpt-account-id'] = account.accountId || account.chatgptUserId || accountId
     headers['host'] = 'chatgpt.com'
     headers['accept'] = isStream ? 'text/event-stream' : 'application/json'
     headers['content-type'] = 'application/json'
-    if (!isCompactRoute) {
+    if (!compactRoute) {
       req.body['store'] = false
     } else if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'store')) {
       delete req.body['store']
@@ -379,7 +424,7 @@ const handleResponses = async (req, res) => {
       logger.debug('🌐 No proxy configured for OpenAI request')
     }
 
-    const codexEndpoint = isCompactRoute
+    const codexEndpoint = compactRoute
       ? 'https://chatgpt.com/backend-api/codex/responses/compact'
       : 'https://chatgpt.com/backend-api/codex/responses'
 
