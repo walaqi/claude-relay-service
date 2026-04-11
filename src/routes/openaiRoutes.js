@@ -313,9 +313,6 @@ const handleResponses = async (req, res) => {
     const codexCliPattern = /^(codex_vscode|codex_cli_rs|codex_exec)\/[\d.]+/i
     const isCodexCLI = codexCliPattern.test(userAgent)
 
-    // 提取 service_tier 用于后续费用计算（在字段被移除前保存）
-    req._serviceTier = req.body?.service_tier || null
-
     const standardResponsesRoute = isStandardResponsesRoute(req)
     const compactRoute = isCompactResponsesRoute(req)
     const shouldUseToggleControlledFlow = standardResponsesRoute && !compactRoute
@@ -352,6 +349,9 @@ const handleResponses = async (req, res) => {
         logger.info('✅ Codex CLI request detected, forwarding as-is')
       }
     }
+
+    // 从最终请求体中提取 service_tier，用于后续费用计算
+    req._serviceTier = req.body?.service_tier || null
 
     // 从最终请求体中提取模型、会话 ID 和流式标志
     // NOTE: For some clients, prompt_cache_key is the only stable per-session key.
