@@ -562,11 +562,29 @@
                 />
                 <span class="flex-1">
                   <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    非 Codex 请求兼容为 Codex 风格
-                  </span>
-                  <span class="block text-xs text-gray-500 dark:text-gray-400">
-                    只对 `/openai/responses` 和 `/openai/v1/responses`
-                    生效。关闭后将保留原始请求体。
+                    <span class="inline-flex items-center gap-1">
+                      <span>非 Codex 请求兼容为 Codex 风格</span>
+                      <el-tooltip placement="top">
+                        <template #content>
+                          <div class="w-[250px] space-y-2 text-xs leading-relaxed">
+                            <div>只对 `/openai/responses` 和 `/openai/v1/responses` 生效。</div>
+                            <div>
+                              关闭后不再做 Codex 风格字段改写，会保留原始 `text`、`service_tier`
+                              等字段。
+                            </div>
+                            <div>
+                              普通 OpenAI 账号仍会保留必要的 `gpt-5-*` 模型名兼容，
+                              方便调度和上游请求继续命中 `gpt-5`。
+                            </div>
+                          </div>
+                        </template>
+                        <span class="inline-flex" @click.stop.prevent>
+                          <i
+                            class="fas fa-question-circle cursor-help text-xs text-gray-400 hover:text-gray-600"
+                          />
+                        </span>
+                      </el-tooltip>
+                    </span>
                   </span>
                 </span>
               </label>
@@ -579,10 +597,22 @@
                 />
                 <span class="flex-1">
                   <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    启用 Payload 规则
-                  </span>
-                  <span class="block text-xs text-gray-500 dark:text-gray-400">
-                    开启后会按顺序写入字段。只填字段不填值时，会把该字段写成空字符串。
+                    <span class="inline-flex items-center gap-1">
+                      <span>启用 Payload 规则</span>
+                      <el-tooltip placement="top">
+                        <template #content>
+                          <div class="w-[240px] space-y-2 text-xs leading-relaxed">
+                            <div>开启后会按顺序写入字段。</div>
+                            <div>只填字段不填值时，会把该字段写成空字符串。</div>
+                          </div>
+                        </template>
+                        <span class="inline-flex" @click.stop.prevent>
+                          <i
+                            class="fas fa-question-circle cursor-help text-xs text-gray-400 hover:text-gray-600"
+                          />
+                        </span>
+                      </el-tooltip>
+                    </span>
                   </span>
                 </span>
               </label>
@@ -592,13 +622,23 @@
                 class="rounded-lg border border-emerald-100 bg-white/70 p-3 dark:border-emerald-800 dark:bg-gray-800/40"
               >
                 <div class="mb-3 flex items-center justify-between">
-                  <div>
-                    <div class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Payload 规则
-                    </div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">
-                      两个开关都开时，先做 Codex 风格兼容，再应用这里的规则。
-                    </div>
+                  <div
+                    class="flex items-center gap-1 text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    <span>Payload 规则</span>
+                    <el-tooltip placement="top">
+                      <template #content>
+                        <div class="w-[240px] space-y-2 text-xs leading-relaxed">
+                          <div>规则会按列表顺序依次执行，后面的规则可以覆盖前面的结果。</div>
+                          <div>两个开关都开启时，先做 Codex 风格兼容，再应用这里的规则。</div>
+                        </div>
+                      </template>
+                      <span class="inline-flex" @click.stop.prevent>
+                        <i
+                          class="fas fa-question-circle cursor-help text-xs text-gray-400 hover:text-gray-600"
+                        />
+                      </span>
+                    </el-tooltip>
                   </div>
                   <button
                     class="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-600"

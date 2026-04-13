@@ -180,7 +180,7 @@ describe('openai responses payload toggles', () => {
     openaiAccountService.decrypt.mockReturnValue('decrypted-token')
   })
 
-  test('passes standard responses through unchanged when both toggles are off', async () => {
+  test('keeps standard responses payload unchanged for openai-responses when both toggles are off', async () => {
     const req = createReq({
       body: {
         model: 'gpt-5-2025-08-07',
@@ -205,7 +205,7 @@ describe('openai responses payload toggles', () => {
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
       createHash('session-a'),
-      'gpt-5-2025-08-07'
+      'gpt-5'
     )
   })
 
@@ -300,6 +300,117 @@ describe('openai responses payload toggles', () => {
       createHash('rule-key'),
       'gpt-5-codex'
     )
+  })
+
+  test('normalizes dated gpt-5 models only for scheduling and upstream openai requests when adaptation is off', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+      accountId: 'openai-1',
+      accountType: 'openai'
+    })
+    openaiAccountService.getAccount.mockResolvedValue({
+      id: 'openai-1',
+      name: 'OpenAI Account',
+      accessToken: 'encrypted-token',
+      accountId: 'chatgpt-account-1'
+    })
+    axios.post.mockResolvedValue({
+      status: 200,
+      data: {
+        model: 'gpt-5',
+        usage: {
+          input_tokens: 10,
+          output_tokens: 4,
+          total_tokens: 14
+        }
+      },
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5-2025-08-07',
+        service_tier: 'priority',
+        prompt_cache_key: 'compat-key',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('compat-key'),
+      'gpt-5'
+    )
+    expect(req.body.model).toBe('gpt-5')
+    expect(req.body.service_tier).toBe('priority')
+    expect(axios.post).toHaveBeenCalled()
+    expect(axios.post.mock.calls[0][1]).toMatchObject({
+      model: 'gpt-5',
+      service_tier: 'priority',
+      store: false
+    })
+  })
+
+  test('normalizes payload-rule gpt-5 aliases for openai scheduling without applying full Codex adaptation', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+      accountId: 'openai-1',
+      accountType: 'openai'
+    })
+    openaiAccountService.getAccount.mockResolvedValue({
+      id: 'openai-1',
+      name: 'OpenAI Account',
+      accessToken: 'encrypted-token',
+      accountId: 'chatgpt-account-1'
+    })
+    axios.post.mockResolvedValue({
+      status: 200,
+      data: {
+        model: 'gpt-5',
+        usage: {
+          input_tokens: 8,
+          output_tokens: 3,
+          total_tokens: 11
+        }
+      },
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-4.1',
+        text: { format: {} },
+        prompt_cache_key: 'rule-model-key',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: true,
+        openaiResponsesPayloadRules: [
+          { path: 'model', valueType: 'string', value: 'gpt-5-2025-08-07' }
+        ]
+      }
+    })
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('rule-model-key'),
+      'gpt-5'
+    )
+    expect(req.body.model).toBe('gpt-5')
+    expect(req.body.text).toEqual({ format: {} })
+    expect(req.body.instructions).toBeUndefined()
+    expect(axios.post.mock.calls[0][1]).toMatchObject({
+      model: 'gpt-5',
+      text: { format: {} },
+      store: false
+    })
   })
 
   test('records the mutated service_tier for standard responses sent through openai accounts', async () => {

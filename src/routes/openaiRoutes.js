@@ -95,18 +95,27 @@ function isStandardResponsesRoute(req) {
   return req.path === '/responses' || req.path === '/v1/responses'
 }
 
-function normalizeGpt5ModelForCodex(body = {}) {
-  const requestedModel = body?.model || null
+function getCodexCompatibleModel(requestedModel = null) {
   const isCodexModel =
     typeof requestedModel === 'string' && requestedModel.toLowerCase().includes('codex')
 
   if (requestedModel && requestedModel.startsWith('gpt-5-') && !isCodexModel) {
-    logger.info(`📝 Model ${requestedModel} detected, normalizing to gpt-5 for Codex API`)
-    body.model = 'gpt-5'
     return 'gpt-5'
   }
 
   return requestedModel
+}
+
+function normalizeGpt5ModelForCodex(body = {}) {
+  const requestedModel = body?.model || null
+  const compatibleModel = getCodexCompatibleModel(requestedModel)
+
+  if (compatibleModel !== requestedModel) {
+    logger.info(`📝 Model ${requestedModel} detected, normalizing to gpt-5 for Codex API`)
+    body.model = compatibleModel
+  }
+
+  return compatibleModel
 }
 
 function applyCodexCliAdaptation(body = {}) {
@@ -366,13 +375,20 @@ const handleResponses = async (req, res) => {
     sessionHash = sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : null
 
     const requestedModel = req.body?.model || null
+    const schedulerModel = getCodexCompatibleModel(requestedModel)
     const isStream = req.body?.stream !== false // 默认为流式（兼容现有行为）
+
+    if (schedulerModel !== requestedModel) {
+      logger.info(
+        `🧭 Using Codex-compatible model ${schedulerModel} for account selection (requested: ${requestedModel})`
+      )
+    }
 
     // 使用调度器选择账户
     ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
       apiKeyData,
       sessionId,
-      requestedModel
+      schedulerModel
     ))
 
     // 如果是 OpenAI-Responses 账户，使用专门的中继服务处理
@@ -380,6 +396,16 @@ const handleResponses = async (req, res) => {
       logger.info(`🔀 Using OpenAI-Responses relay service for account: ${account.name}`)
       return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
     }
+
+    if (schedulerModel !== requestedModel) {
+      logger.info(
+        `📝 Standard Responses request normalized model ${requestedModel} -> ${schedulerModel} for OpenAI Codex backend`
+      )
+      req.body.model = schedulerModel
+    }
+
+    const upstreamRequestedModel = req.body?.model || requestedModel
+
     // 基于白名单构造上游所需的请求头，确保键为小写且值受控
     const incoming = req.headers || {}
 
@@ -657,13 +683,13 @@ const handleResponses = async (req, res) => {
     if (!isStream) {
       // 非流式响应处理
       try {
-        logger.info(`📄 Processing OpenAI non-stream response for model: ${requestedModel}`)
+        logger.info(`📄 Processing OpenAI non-stream response for model: ${upstreamRequestedModel}`)
 
         // 直接获取完整响应
         const responseData = upstream.data
 
         // 从响应中获取实际的 model 和 usage
-        actualModel = responseData.model || requestedModel || 'gpt-4'
+        actualModel = responseData.model || upstreamRequestedModel || 'gpt-4'
         usageData = responseData.usage
 
         logger.debug(`📊 Non-stream response - Model: ${actualModel}, Usage:`, usageData)
@@ -797,7 +823,7 @@ const handleResponses = async (req, res) => {
           const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
 
           // 使用响应中的真实 model，如果没有则使用请求中的 model，最后回退到默认值
-          const modelToRecord = actualModel || requestedModel || 'gpt-4'
+          const modelToRecord = actualModel || upstreamRequestedModel || 'gpt-4'
 
           const streamCosts = await apiKeyService.recordUsage(
             apiKeyData.id,
@@ -817,7 +843,7 @@ const handleResponses = async (req, res) => {
           )
 
           logger.info(
-            `📊 Recorded OpenAI usage - Input: ${totalInputTokens}(actual:${actualInputTokens}+cached:${cacheReadTokens}), Output: ${outputTokens}, Total: ${usageData.total_tokens || totalInputTokens + outputTokens}, Model: ${modelToRecord} (actual: ${actualModel}, requested: ${requestedModel})`
+            `📊 Recorded OpenAI usage - Input: ${totalInputTokens}(actual:${actualInputTokens}+cached:${cacheReadTokens}), Output: ${outputTokens}, Total: ${usageData.total_tokens || totalInputTokens + outputTokens}, Model: ${modelToRecord} (actual: ${actualModel}, requested: ${upstreamRequestedModel})`
           )
           usageReported = true
 
