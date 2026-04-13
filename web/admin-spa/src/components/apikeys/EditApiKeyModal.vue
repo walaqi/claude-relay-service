@@ -1368,7 +1368,8 @@ const updateApiKey = async () => {
       weeklyResetHour: form.weeklyResetHour,
       enableOpenAIResponsesCodexAdaptation: form.enableOpenAIResponsesCodexAdaptation,
       enableOpenAIResponsesPayloadRules: form.enableOpenAIResponsesPayloadRules,
-      openaiResponsesPayloadRules: form.enableOpenAIResponsesPayloadRules ? payloadRules : [],
+      // 规则内容独立持久化，关闭开关时也要保留已保存的休眠规则。
+      openaiResponsesPayloadRules: payloadRules,
       permissions: form.permissions,
       tags: form.tags
     }
