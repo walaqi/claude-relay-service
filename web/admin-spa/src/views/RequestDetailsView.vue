@@ -604,6 +604,7 @@ const exporting = ref(false)
 const requestDetailBodyPreviewPurging = ref(false)
 const detailVisible = ref(false)
 const activeRequestId = ref('')
+const activeSnapshotId = ref(null)
 const captureEnabled = ref(false)
 const retentionHours = ref(6)
 const bodyPreviewEnabled = ref(false)
@@ -695,7 +696,7 @@ const areDateRangesEqual = (currentRange = [], nextRange = []) => {
   )
 }
 
-const buildParams = (page) => {
+const buildParams = (page, snapshotId = activeSnapshotId.value) => {
   const params = {
     page,
     pageSize: pagination.pageSize,
@@ -718,6 +719,8 @@ const buildParams = (page) => {
     }
   }
 
+  if (snapshotId) params.snapshotId = snapshotId
+
   return params
 }
 
@@ -725,6 +728,7 @@ const syncResponseState = (data) => {
   captureEnabled.value = data.captureEnabled === true
   retentionHours.value = data.retentionHours || 6
   bodyPreviewEnabled.value = data.bodyPreviewEnabled === true
+  activeSnapshotId.value = data.snapshotId || null
   records.value = data.records || []
 
   const pageInfo = data.pagination || {}
@@ -767,6 +771,10 @@ const syncResponseState = (data) => {
   summary.cacheCreateNotApplicable = summaryData.cacheCreateNotApplicable === true
 }
 
+const invalidateSnapshot = () => {
+  activeSnapshotId.value = null
+}
+
 const fetchRecords = async (page = pagination.currentPage) => {
   debouncedKeywordFetch.cancel()
   const version = ++fetchVersion
@@ -801,10 +809,12 @@ const handleSizeChange = (size) => {
 }
 
 const refreshRecords = () => {
+  invalidateSnapshot()
   fetchRecords(pagination.currentPage)
 }
 
 const resetFilters = () => {
+  invalidateSnapshot()
   filters.dateRange = null
   filters.keyword = ''
   filters.apiKeyId = ''
@@ -876,14 +886,16 @@ const exportCsv = async () => {
     let page = 1
     let totalPages = 1
     let totalRecords = 0
+    let snapshotId = activeSnapshotId.value
     const maxPages = 100
 
     while (page <= totalPages && page <= maxPages) {
       const response = await getRequestDetailsApi({
-        ...buildParams(page),
+        ...buildParams(page, snapshotId),
         pageSize: 200
       })
       const payload = response.data || {}
+      snapshotId = payload.snapshotId || null
       aggregated.push(...(payload.records || []))
       totalPages = payload.pagination?.totalPages || 1
       if (page === 1) {
@@ -990,6 +1002,7 @@ const formatReasoning = (value) => value || '-'
 
 const debouncedKeywordFetch = debounce(() => {
   pagination.currentPage = 1
+  invalidateSnapshot()
   fetchRecords(1)
 }, 300)
 
@@ -1005,6 +1018,7 @@ watch(
   () => {
     debouncedKeywordFetch.cancel()
     pagination.currentPage = 1
+    invalidateSnapshot()
     fetchRecords(1)
   }
 )
@@ -1013,6 +1027,7 @@ watch(
   () => filters.dateRange,
   () => {
     pagination.currentPage = 1
+    invalidateSnapshot()
     fetchRecords(1)
   },
   { deep: true }
