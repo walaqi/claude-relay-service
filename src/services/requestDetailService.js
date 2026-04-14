@@ -1084,17 +1084,28 @@ class RequestDetailService {
       return null
     }
 
-    const rawSnapshot = await client.get(`${REQUEST_DETAIL_QUERY_SNAPSHOT_PREFIX}${snapshotId}`)
+    let rawSnapshot
+    try {
+      rawSnapshot = await client.get(`${REQUEST_DETAIL_QUERY_SNAPSHOT_PREFIX}${snapshotId}`)
+    } catch (error) {
+      logger.warn(`⚠️ Failed to read request detail query snapshot: ${error.message}`)
+      return null
+    }
+
     const parsedSnapshot = safeJsonParse(rawSnapshot, 'request detail query snapshot')
     if (!parsedSnapshot || parsedSnapshot.filterSignature !== filterSignature) {
       return null
     }
 
     if (typeof client.expire === 'function') {
-      await client.expire(
-        `${REQUEST_DETAIL_QUERY_SNAPSHOT_PREFIX}${snapshotId}`,
-        REQUEST_DETAIL_QUERY_SNAPSHOT_TTL_SECONDS
-      )
+      try {
+        await client.expire(
+          `${REQUEST_DETAIL_QUERY_SNAPSHOT_PREFIX}${snapshotId}`,
+          REQUEST_DETAIL_QUERY_SNAPSHOT_TTL_SECONDS
+        )
+      } catch (error) {
+        logger.warn(`⚠️ Failed to renew request detail query snapshot TTL: ${error.message}`)
+      }
     }
 
     return {
@@ -1141,12 +1152,17 @@ class RequestDetailService {
     }
 
     const snapshotId = makeRequestDetailQuerySnapshotId()
-    await client.set(
-      `${REQUEST_DETAIL_QUERY_SNAPSHOT_PREFIX}${snapshotId}`,
-      serializedSnapshot,
-      'EX',
-      REQUEST_DETAIL_QUERY_SNAPSHOT_TTL_SECONDS
-    )
+    try {
+      await client.set(
+        `${REQUEST_DETAIL_QUERY_SNAPSHOT_PREFIX}${snapshotId}`,
+        serializedSnapshot,
+        'EX',
+        REQUEST_DETAIL_QUERY_SNAPSHOT_TTL_SECONDS
+      )
+    } catch (error) {
+      logger.warn(`⚠️ Failed to store request detail query snapshot: ${error.message}`)
+      return null
+    }
 
     return snapshotId
   }
@@ -1215,6 +1231,8 @@ class RequestDetailService {
     )
     const filterSignature = createRequestDetailFilterSignature({
       ...filters,
+      startDate: effectiveStart.toISOString(),
+      endDate: effectiveEnd.toISOString(),
       sortOrder
     })
 
