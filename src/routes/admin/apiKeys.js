@@ -1643,13 +1643,12 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
       enableOpenAIResponsesPayloadRules !== undefined &&
       typeof enableOpenAIResponsesPayloadRules !== 'boolean'
     ) {
-      return res
-        .status(400)
-        .json({ error: 'enableOpenAIResponsesPayloadRules must be a boolean' })
+      return res.status(400).json({ error: 'enableOpenAIResponsesPayloadRules must be a boolean' })
     }
 
-    const payloadRulesValidation =
-      requestBodyRuleService.validateAndNormalizeRules(openaiResponsesPayloadRules)
+    const payloadRulesValidation = requestBodyRuleService.validateAndNormalizeRules(
+      openaiResponsesPayloadRules
+    )
     if (!payloadRulesValidation.valid) {
       return res.status(400).json({ error: payloadRulesValidation.error })
     }
@@ -1712,9 +1711,7 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
           ? enableOpenAIResponsesCodexAdaptation
           : true,
       enableOpenAIResponsesPayloadRules:
-        enableOpenAIResponsesPayloadRules !== undefined
-          ? enableOpenAIResponsesPayloadRules
-          : false,
+        enableOpenAIResponsesPayloadRules !== undefined ? enableOpenAIResponsesPayloadRules : false,
       openaiResponsesPayloadRules: payloadRulesValidation.rules
     })
 
@@ -2341,8 +2338,9 @@ router.put('/api-keys/:keyId', authenticateAdmin, async (req, res) => {
     }
 
     if (openaiResponsesPayloadRules !== undefined) {
-      const payloadRulesValidation =
-        requestBodyRuleService.validateAndNormalizeRules(openaiResponsesPayloadRules)
+      const payloadRulesValidation = requestBodyRuleService.validateAndNormalizeRules(
+        openaiResponsesPayloadRules
+      )
       if (!payloadRulesValidation.valid) {
         return res.status(400).json({ error: payloadRulesValidation.error })
       }
