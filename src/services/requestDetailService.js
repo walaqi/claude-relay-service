@@ -155,17 +155,141 @@ function normalizeOptionalFilterValue(value) {
   return normalized ? normalized : null
 }
 
-function createRequestDetailFilterSignature(filters = {}) {
-  return JSON.stringify({
-    startDate: toIsoString(filters.startDate),
-    endDate: toIsoString(filters.endDate),
+function createRequestDetailDateBoundarySignature(type, rawValue, effectiveValue, boundaryValue) {
+  if (!rawValue) {
+    return {
+      mode: 'absent',
+      value: null
+    }
+  }
+
+  const rawDate = rawValue instanceof Date ? rawValue : new Date(rawValue)
+  const effectiveIso = toIsoString(effectiveValue)
+  if (type === 'start') {
+    const floorDate =
+      boundaryValue instanceof Date ? boundaryValue : new Date(boundaryValue || Date.now())
+    if (rawDate.getTime() <= floorDate.getTime()) {
+      return {
+        mode: 'retention_floor',
+        value: effectiveIso
+      }
+    }
+  }
+
+  if (type === 'end') {
+    const ceilingDate =
+      boundaryValue instanceof Date ? boundaryValue : new Date(boundaryValue || Date.now())
+    if (rawDate.getTime() >= ceilingDate.getTime()) {
+      return {
+        mode: 'now_cap',
+        value: effectiveIso
+      }
+    }
+  }
+
+  return {
+    mode: 'fixed',
+    value: rawDate.toISOString()
+  }
+}
+
+function normalizeRequestDetailDateBoundarySignature(boundary = {}, legacyValue = null) {
+  if (!boundary || typeof boundary !== 'object' || Array.isArray(boundary)) {
+    return {
+      mode: legacyValue ? 'fixed' : 'absent',
+      value: toIsoString(legacyValue)
+    }
+  }
+
+  const allowedModes = new Set(['absent', 'fixed', 'retention_floor', 'now_cap'])
+  const mode = allowedModes.has(boundary.mode) ? boundary.mode : legacyValue ? 'fixed' : 'absent'
+  return {
+    mode,
+    value: toIsoString(boundary.value)
+  }
+}
+
+function createRequestDetailFilterSignature(
+  filters = {},
+  dateBoundarySignature = {},
+  retentionHours = null
+) {
+  return {
     keyword: normalizeOptionalFilterValue(filters.keyword),
     apiKeyId: normalizeOptionalFilterValue(filters.apiKeyId),
     accountId: normalizeOptionalFilterValue(filters.accountId),
     model: normalizeOptionalFilterValue(filters.model),
     endpoint: normalizeOptionalFilterValue(filters.endpoint),
-    sortOrder: filters.sortOrder === 'asc' ? 'asc' : 'desc'
-  })
+    sortOrder: filters.sortOrder === 'asc' ? 'asc' : 'desc',
+    retentionHours:
+      retentionHours !== null && retentionHours !== undefined ? Number(retentionHours) : null,
+    startBoundary: normalizeRequestDetailDateBoundarySignature(dateBoundarySignature.startBoundary),
+    endBoundary: normalizeRequestDetailDateBoundarySignature(dateBoundarySignature.endBoundary)
+  }
+}
+
+function requestDetailDateBoundarySignaturesMatch(snapshotBoundary, currentBoundary, type) {
+  if (snapshotBoundary.mode === currentBoundary.mode) {
+    if (snapshotBoundary.mode === 'fixed') {
+      return snapshotBoundary.value === currentBoundary.value
+    }
+    return true
+  }
+
+  if (type === 'end') {
+    return (
+      snapshotBoundary.mode === 'now_cap' &&
+      currentBoundary.mode === 'fixed' &&
+      snapshotBoundary.value === currentBoundary.value
+    )
+  }
+
+  return false
+}
+
+function requestDetailFilterSignaturesMatch(snapshotSignature, currentSignature) {
+  const normalizedSnapshot = createRequestDetailFilterSignature(
+    snapshotSignature,
+    {
+      startBoundary: snapshotSignature?.startBoundary || {
+        mode: snapshotSignature?.startDate ? 'fixed' : 'absent',
+        value: snapshotSignature?.startDate || null
+      },
+      endBoundary: snapshotSignature?.endBoundary || {
+        mode: snapshotSignature?.endDate ? 'fixed' : 'absent',
+        value: snapshotSignature?.endDate || null
+      }
+    },
+    snapshotSignature?.retentionHours
+  )
+  const normalizedCurrent = createRequestDetailFilterSignature(
+    currentSignature,
+    {
+      startBoundary: currentSignature?.startBoundary,
+      endBoundary: currentSignature?.endBoundary
+    },
+    currentSignature?.retentionHours
+  )
+
+  return (
+    normalizedSnapshot.keyword === normalizedCurrent.keyword &&
+    normalizedSnapshot.apiKeyId === normalizedCurrent.apiKeyId &&
+    normalizedSnapshot.accountId === normalizedCurrent.accountId &&
+    normalizedSnapshot.model === normalizedCurrent.model &&
+    normalizedSnapshot.endpoint === normalizedCurrent.endpoint &&
+    normalizedSnapshot.sortOrder === normalizedCurrent.sortOrder &&
+    normalizedSnapshot.retentionHours === normalizedCurrent.retentionHours &&
+    requestDetailDateBoundarySignaturesMatch(
+      normalizedSnapshot.startBoundary,
+      normalizedCurrent.startBoundary,
+      'start'
+    ) &&
+    requestDetailDateBoundarySignaturesMatch(
+      normalizedSnapshot.endBoundary,
+      normalizedCurrent.endBoundary,
+      'end'
+    )
+  )
 }
 
 function flattenMatchedPointers(pointers = []) {
@@ -1093,7 +1217,10 @@ class RequestDetailService {
     }
 
     const parsedSnapshot = safeJsonParse(rawSnapshot, 'request detail query snapshot')
-    if (!parsedSnapshot || parsedSnapshot.filterSignature !== filterSignature) {
+    if (
+      !parsedSnapshot ||
+      !requestDetailFilterSignaturesMatch(parsedSnapshot.filterSignature, filterSignature)
+    ) {
       return null
     }
 
@@ -1201,6 +1328,13 @@ class RequestDetailService {
   }
 
   async listRequestDetails(filters = {}) {
+    filters = {
+      ...filters,
+      apiKeyId: normalizeOptionalFilterValue(filters.apiKeyId),
+      accountId: normalizeOptionalFilterValue(filters.accountId),
+      model: normalizeOptionalFilterValue(filters.model),
+      endpoint: normalizeOptionalFilterValue(filters.endpoint)
+    }
     const settings = await this.getSettings()
     const emptyResult = this._emptyListResult(settings, filters)
 
@@ -1229,12 +1363,24 @@ class RequestDetailService {
       effectiveEnd,
       sortOrder
     )
-    const filterSignature = createRequestDetailFilterSignature({
-      ...filters,
-      startDate: effectiveStart.toISOString(),
-      endDate: effectiveEnd.toISOString(),
-      sortOrder
-    })
+    const filterSignature = createRequestDetailFilterSignature(
+      filters,
+      {
+        startBoundary: createRequestDetailDateBoundarySignature(
+          'start',
+          filters.startDate,
+          effectiveStart,
+          retentionStart
+        ),
+        endBoundary: createRequestDetailDateBoundarySignature(
+          'end',
+          filters.endDate,
+          effectiveEnd,
+          now
+        )
+      },
+      settings.retentionHours
+    )
 
     const snapshot = await this._loadQuerySnapshot(filters.snapshotId, filterSignature)
     if (snapshot) {

@@ -750,6 +750,7 @@ const syncResponseState = (data) => {
       nextRange.every(Boolean) &&
       !areDateRangesEqual(filters.dateRange || [], nextRange)
     ) {
+      suppressDateRangeWatch = true
       filters.dateRange = nextRange
     }
   }
@@ -770,6 +771,8 @@ const syncResponseState = (data) => {
   summary.cacheHitRate = summaryData.cacheHitRate || 0
   summary.cacheCreateNotApplicable = summaryData.cacheCreateNotApplicable === true
 }
+
+let suppressDateRangeWatch = false
 
 const invalidateSnapshot = () => {
   activeSnapshotId.value = null
@@ -1026,6 +1029,10 @@ watch(
 watch(
   () => filters.dateRange,
   () => {
+    if (suppressDateRangeWatch) {
+      suppressDateRangeWatch = false
+      return
+    }
     pagination.currentPage = 1
     invalidateSnapshot()
     fetchRecords(1)
