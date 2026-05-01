@@ -1809,7 +1809,9 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
     const apiKeyIds = await redis.scanApiKeyIds()
     const apiKeyBasicData = await redis.batchGetApiKeys(apiKeyIds)
     const apiKeyMap = new Map(
-      apiKeyBasicData.filter((key) => !key.isDeleted).map((key) => [key.id, key])
+      apiKeyBasicData
+        .filter((key) => key && !key.isDeleted)
+        .map((key) => [key.id, key])
     )
 
     if (granularity === 'hour') {

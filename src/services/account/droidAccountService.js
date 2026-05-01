@@ -30,13 +30,15 @@ class DroidAccountService {
     this._encryptor = createEncryptor('droid-account-salt')
 
     // 🧹 定期清理缓存（每10分钟）
-    setInterval(
-      () => {
-        this._encryptor.clearCache()
-        logger.info('🧹 Droid decrypt cache cleanup completed', this._encryptor.getStats())
-      },
-      10 * 60 * 1000
-    )
+    if (process.env.WORKER_MODE !== 'true') {
+      setInterval(
+        () => {
+          this._encryptor.clearCache()
+          logger.info('🧹 Droid decrypt cache cleanup completed', this._encryptor.getStats())
+        },
+        10 * 60 * 1000
+      )
+    }
 
     this.supportedEndpointTypes = new Set(['anthropic', 'openai', 'comm'])
   }

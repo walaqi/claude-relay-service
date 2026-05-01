@@ -1,0 +1,24 @@
+name = "claude-relay-service"
+main = "dist/worker.js"
+compatibility_date = "2025-09-21"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+NODE_ENV = "production"
+WORKER_MODE = "true"
+APP_VERSION = "1.1.303"
+
+# Secrets (通过 wrangler secret put 设置):
+# JWT_SECRET, ENCRYPTION_KEY, REDIS_URL, REDIS_TOKEN
+
+[build]
+command = "node scripts/build-worker.js"
+
+[triggers]
+crons = [
+  "*/1 * * * *",
+  "0 * * * *",
+  "*/5 * * * *",
+  "*/10 * * * *",
+  "0 0 * * *",
+]

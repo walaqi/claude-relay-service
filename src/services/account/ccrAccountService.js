@@ -15,13 +15,15 @@ class CcrAccountService {
     this._encryptor = createEncryptor('ccr-account-salt')
 
     // 🧹 定期清理缓存（每10分钟）
-    setInterval(
-      () => {
-        this._encryptor.clearCache()
-        logger.info('🧹 CCR account decrypt cache cleanup completed', this._encryptor.getStats())
-      },
-      10 * 60 * 1000
-    )
+    if (process.env.WORKER_MODE !== 'true') {
+      setInterval(
+        () => {
+          this._encryptor.clearCache()
+          logger.info('🧹 CCR account decrypt cache cleanup completed', this._encryptor.getStats())
+        },
+        10 * 60 * 1000
+      )
+    }
   }
 
   // 🏢 创建CCR账户

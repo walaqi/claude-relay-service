@@ -1359,6 +1359,438 @@ show_status() {
     echo -e "\n${BLUE}===========================${NC}"
 }
 
+# 检查 wrangler CLI 是否安装
+cf_check_wrangler() {
+    if command_exists wrangler; then
+        return 0
+    fi
+
+    if command_exists npx; then
+        print_info "wrangler CLI 未全局安装，将使用 npx wrangler"
+        return 0
+    fi
+
+    print_error "wrangler CLI 未安装"
+    print_info "请运行: npm install -g wrangler"
+    print_info "或确保项目中已安装: npm install --save-dev wrangler"
+    return 1
+}
+
+# 获取 wrangler 命令
+get_wrangler_cmd() {
+    if command_exists wrangler; then
+        echo "wrangler"
+    else
+        echo "npx wrangler"
+    fi
+}
+
+# Cloudflare Pages 设置
+pages_setup() {
+    print_info "Cloudflare Pages 设置向导"
+    echo ""
+
+    # 检查 wrangler
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    # 检查登录状态
+    print_info "检查 Cloudflare 登录状态..."
+    if ! $wrangler_cmd whoami >/dev/null 2>&1; then
+        print_warning "未登录 Cloudflare，正在打开登录页面..."
+        $wrangler_cmd login
+    fi
+
+    # 获取项目名
+    echo ""
+    echo -n "Pages 项目名称 (默认: claude-relay-admin): "
+    read input
+    local pages_project=${input:-claude-relay-admin}
+
+    # 获取后端域名
+    echo ""
+    echo -e "${YELLOW}后端 API 地址用于 _redirects 代理规则${NC}"
+    echo "示例: https://api.example.com 或 https://your-worker.your-subdomain.workers.dev"
+    echo -n "后端 API 地址: "
+    read backend_domain
+
+    if [ -z "$backend_domain" ]; then
+        print_error "后端 API 地址不能为空"
+        return 1
+    fi
+
+    # 去除末尾斜杠
+    backend_domain=${backend_domain%/}
+
+    # 确定 _redirects 文件路径
+    local redirects_file=""
+    if [ -n "$APP_DIR" ] && [ -d "$APP_DIR/web/admin-spa" ]; then
+        redirects_file="$APP_DIR/web/admin-spa/public/_redirects"
+    elif [ -d "web/admin-spa" ]; then
+        redirects_file="web/admin-spa/public/_redirects"
+    else
+        print_error "找不到 web/admin-spa 目录"
+        return 1
+    fi
+
+    # 创建 public 目录
+    mkdir -p "$(dirname "$redirects_file")"
+
+    # 写入 _redirects 文件
+    cat > "$redirects_file" << EOF
+# API 代理到后端服务
+/admin/*      ${backend_domain}/admin/:splat      200
+/apiStats/*   ${backend_domain}/apiStats/:splat    200
+/web/*        ${backend_domain}/web/:splat         200
+/users/*      ${backend_domain}/users/:splat       200
+
+# SPA fallback — 所有未匹配路径返回 index.html
+/*  /index.html  200
+EOF
+
+    print_success "_redirects 文件已更新: $redirects_file"
+
+    # 保存配置
+    local conf_dir="$HOME/.config/crs"
+    mkdir -p "$conf_dir" 2>/dev/null || true
+    cat > "$conf_dir/pages.conf" << EOF
+PAGES_PROJECT="$pages_project"
+BACKEND_DOMAIN="$backend_domain"
+EOF
+
+    print_success "配置已保存到 $conf_dir/pages.conf"
+
+    echo ""
+    echo -e "${GREEN}=== Pages 设置完成 ===${NC}"
+    echo -e "项目名称: ${GREEN}$pages_project${NC}"
+    echo -e "后端地址: ${GREEN}$backend_domain${NC}"
+    echo ""
+    echo -e "${YELLOW}下一步：${NC}"
+    echo "  运行 'crs pages:deploy' 构建并部署前端"
+}
+
+# Cloudflare Pages 部署
+pages_deploy() {
+    print_info "部署管理前端到 Cloudflare Pages..."
+
+    # 检查 wrangler
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    # 确定项目目录
+    local spa_dir=""
+    if [ -n "$APP_DIR" ] && [ -d "$APP_DIR/web/admin-spa" ]; then
+        spa_dir="$APP_DIR/web/admin-spa"
+    elif [ -d "web/admin-spa" ]; then
+        spa_dir="web/admin-spa"
+    else
+        print_error "找不到 web/admin-spa 目录"
+        return 1
+    fi
+
+    # 读取配置
+    local pages_project="claude-relay-admin"
+    local conf_file="$HOME/.config/crs/pages.conf"
+    if [ -f "$conf_file" ]; then
+        local conf_project=$(grep "^PAGES_PROJECT=" "$conf_file" 2>/dev/null | cut -d'"' -f2)
+        if [ -n "$conf_project" ]; then
+            pages_project="$conf_project"
+        fi
+    fi
+
+    # 检查 _redirects 文件
+    if [ ! -f "$spa_dir/public/_redirects" ]; then
+        print_warning "_redirects 文件不存在"
+        print_info "请先运行 'crs pages:setup' 配置后端代理地址"
+        return 1
+    fi
+
+    # 检查 _redirects 是否还包含占位符
+    if grep -q "YOUR_BACKEND_DOMAIN" "$spa_dir/public/_redirects" 2>/dev/null; then
+        print_error "_redirects 文件中包含未替换的占位符 YOUR_BACKEND_DOMAIN"
+        print_info "请先运行 'crs pages:setup' 配置后端代理地址"
+        return 1
+    fi
+
+    # 构建前端
+    print_info "构建前端..."
+    cd "$spa_dir"
+
+    if [ ! -d "node_modules" ]; then
+        print_info "安装前端依赖..."
+        npm install
+    fi
+
+    if ! VITE_APP_BASE_URL=/ npx vite build; then
+        print_error "前端构建失败"
+        return 1
+    fi
+
+    print_success "前端构建完成"
+
+    # 验证 _redirects 在 dist 中
+    if [ ! -f "dist/_redirects" ]; then
+        print_warning "_redirects 未出现在 dist 中，手动复制..."
+        cp public/_redirects dist/_redirects
+    fi
+
+    # 部署到 Pages
+    print_info "部署到 Cloudflare Pages (项目: $pages_project)..."
+    if $wrangler_cmd pages deploy dist --project-name "$pages_project"; then
+        print_success "部署成功！"
+        echo ""
+        echo -e "${GREEN}=== 部署完成 ===${NC}"
+        echo -e "项目: ${GREEN}$pages_project${NC}"
+        echo -e "访问: ${GREEN}https://$pages_project.pages.dev${NC}"
+    else
+        print_error "部署失败"
+        return 1
+    fi
+}
+
+# ============================================================
+# Cloudflare Workers 命令
+# ============================================================
+
+# Workers 设置向导
+cf_setup() {
+    print_info "Cloudflare Workers 设置向导"
+    echo ""
+
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    # 检查登录状态
+    print_info "检查 Cloudflare 登录状态..."
+    if ! $wrangler_cmd whoami >/dev/null 2>&1; then
+        print_warning "未登录 Cloudflare，正在打开登录页面..."
+        $wrangler_cmd login
+    fi
+
+    # 检查 wrangler.toml
+    local toml_file=""
+    if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/wrangler.toml" ]; then
+        toml_file="$APP_DIR/wrangler.toml"
+    elif [ -f "wrangler.toml" ]; then
+        toml_file="wrangler.toml"
+    else
+        print_error "找不到 wrangler.toml，请确认项目根目录"
+        return 1
+    fi
+
+    print_success "找到配置: $toml_file"
+
+    # 提示设置必要的 secrets
+    echo ""
+    echo -e "${YELLOW}=== 必要的 Secrets ===${NC}"
+    echo "Workers 需要以下 secrets 才能正常运行："
+    echo "  JWT_SECRET         — JWT 密钥（32字符+）"
+    echo "  ENCRYPTION_KEY     — AES 加密密钥（32字符固定）"
+    echo "  UPSTASH_REDIS_URL  — Upstash Redis REST URL"
+    echo "  UPSTASH_REDIS_TOKEN — Upstash Redis REST Token"
+    echo ""
+    echo -e "${YELLOW}运行以下命令设置 secrets：${NC}"
+    echo "  crs cf:secret JWT_SECRET"
+    echo "  crs cf:secret ENCRYPTION_KEY"
+    echo "  crs cf:secret UPSTASH_REDIS_URL"
+    echo "  crs cf:secret UPSTASH_REDIS_TOKEN"
+    echo ""
+
+    # 检查依赖
+    local project_dir=""
+    if [ -n "$APP_DIR" ]; then
+        project_dir="$APP_DIR"
+    else
+        project_dir="."
+    fi
+
+    if [ ! -f "$project_dir/node_modules/.package-lock.json" ] 2>/dev/null; then
+        print_info "安装项目依赖..."
+        cd "$project_dir" && npm install
+    fi
+
+    # 检查 esbuild
+    if ! [ -f "$project_dir/node_modules/.bin/esbuild" ]; then
+        print_info "安装 esbuild..."
+        cd "$project_dir" && npm install --save-dev esbuild
+    fi
+
+    # 检查 @upstash/redis
+    if ! [ -d "$project_dir/node_modules/@upstash/redis" ]; then
+        print_info "安装 @upstash/redis..."
+        cd "$project_dir" && npm install @upstash/redis
+    fi
+
+    echo ""
+    echo -e "${GREEN}=== Workers 设置完成 ===${NC}"
+    echo -e "${YELLOW}下一步：${NC}"
+    echo "  1. 设置 secrets: crs cf:secret <NAME>"
+    echo "  2. 本地测试: crs cf:dev"
+    echo "  3. 部署: crs cf:deploy"
+}
+
+# Workers 部署
+cf_deploy() {
+    print_info "部署到 Cloudflare Workers..."
+
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    # 确定项目目录
+    local project_dir=""
+    if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/wrangler.toml" ]; then
+        project_dir="$APP_DIR"
+    elif [ -f "wrangler.toml" ]; then
+        project_dir="."
+    else
+        print_error "找不到 wrangler.toml"
+        return 1
+    fi
+
+    cd "$project_dir"
+
+    # 构建
+    print_info "构建 Worker..."
+    if ! node scripts/build-worker.js; then
+        print_error "构建失败"
+        return 1
+    fi
+    print_success "构建完成"
+
+    # 部署
+    print_info "部署中..."
+    if $wrangler_cmd deploy; then
+        print_success "部署成功！"
+        echo ""
+        $wrangler_cmd whoami 2>/dev/null
+    else
+        print_error "部署失败"
+        return 1
+    fi
+}
+
+# Workers Secret 设置
+cf_secret() {
+    local secret_name="$1"
+
+    if [ -z "$secret_name" ]; then
+        echo "用法: $0 cf:secret <SECRET_NAME>"
+        echo ""
+        echo "必要的 secrets:"
+        echo "  JWT_SECRET          — JWT 密钥"
+        echo "  ENCRYPTION_KEY      — AES 加密密钥"
+        echo "  UPSTASH_REDIS_URL   — Upstash Redis REST URL"
+        echo "  UPSTASH_REDIS_TOKEN — Upstash Redis REST Token"
+        return 1
+    fi
+
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    # 确定项目目录
+    if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/wrangler.toml" ]; then
+        cd "$APP_DIR"
+    fi
+
+    print_info "设置 secret: $secret_name"
+    echo "请输入 secret 值（输入后按回车）："
+    $wrangler_cmd secret put "$secret_name"
+}
+
+# Workers 状态
+cf_status() {
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/wrangler.toml" ]; then
+        cd "$APP_DIR"
+    fi
+
+    print_info "Workers 部署状态："
+    echo ""
+    $wrangler_cmd deployments list 2>/dev/null || print_warning "无法获取部署列表"
+}
+
+# Workers 日志
+cf_logs() {
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/wrangler.toml" ]; then
+        cd "$APP_DIR"
+    fi
+
+    print_info "实时查看 Workers 日志（Ctrl+C 退出）..."
+    $wrangler_cmd tail
+}
+
+# Workers 本地开发
+cf_dev() {
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/wrangler.toml" ]; then
+        cd "$APP_DIR"
+    elif [ -f "wrangler.toml" ]; then
+        true
+    else
+        print_error "找不到 wrangler.toml"
+        return 1
+    fi
+
+    print_info "启动 Workers 本地开发服务器..."
+    $wrangler_cmd dev
+}
+
+# Workers 删除
+cf_delete() {
+    if ! cf_check_wrangler; then
+        return 1
+    fi
+
+    local wrangler_cmd=$(get_wrangler_cmd)
+
+    if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/wrangler.toml" ]; then
+        cd "$APP_DIR"
+    fi
+
+    echo -e "${RED}⚠️  警告：此操作将删除 Workers 部署，不可恢复！${NC}"
+    echo -n "确认删除？(输入 yes 确认): "
+    read confirm
+
+    if [ "$confirm" != "yes" ]; then
+        print_info "已取消"
+        return 0
+    fi
+
+    print_info "删除 Workers 部署..."
+    $wrangler_cmd delete
+}
+
 # 显示帮助
 show_help() {
     echo "Claude Relay Service 管理脚本"
@@ -1376,6 +1808,15 @@ show_help() {
     echo "  switch-branch  - 切换分支"
     echo "  update-pricing - 更新模型价格数据"
     echo "  symlink        - 创建 crs 快捷命令"
+    echo "  pages:setup    - 配置 Cloudflare Pages 项目和后端代理地址"
+    echo "  pages:deploy   - 构建并部署前端到 Cloudflare Pages"
+    echo "  cf:setup       - Cloudflare Workers 设置向导"
+    echo "  cf:deploy      - 构建并部署到 Cloudflare Workers"
+    echo "  cf:secret      - 设置 Workers Secret (用法: cf:secret <NAME>)"
+    echo "  cf:status      - 查看 Workers 部署状态"
+    echo "  cf:logs        - 实时查看 Workers 日志"
+    echo "  cf:dev         - 启动 Workers 本地开发服务器"
+    echo "  cf:delete      - 删除 Workers 部署"
     echo "  help           - 显示帮助"
     echo ""
 }
@@ -1806,6 +2247,33 @@ main() {
                 exit 1
             fi
             create_symlink
+            ;;
+        pages:setup)
+            pages_setup
+            ;;
+        pages:deploy)
+            pages_deploy
+            ;;
+        cf:setup)
+            cf_setup
+            ;;
+        cf:deploy)
+            cf_deploy
+            ;;
+        cf:secret)
+            cf_secret "$2"
+            ;;
+        cf:status)
+            cf_status
+            ;;
+        cf:logs)
+            cf_logs
+            ;;
+        cf:dev)
+            cf_dev
+            ;;
+        cf:delete)
+            cf_delete
             ;;
         help)
             show_help

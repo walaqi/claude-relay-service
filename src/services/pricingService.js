@@ -1,24 +1,30 @@
-const fs = require('fs')
-const path = require('path')
-const https = require('https')
+const isWorkerMode = () => process.env.WORKER_MODE === 'true'
+
+const fs = isWorkerMode() ? null : require('fs')
+const path = isWorkerMode() ? null : require('path')
+const https = isWorkerMode() ? null : require('https')
 const crypto = require('crypto')
 const pricingSource = require('../../config/pricingSource')
 const logger = require('../utils/logger')
 
 class PricingService {
   constructor() {
-    this.dataDir = path.join(process.cwd(), 'data')
-    this.pricingFile = path.join(this.dataDir, 'model_pricing.json')
+    this._isWorkerMode = isWorkerMode()
+    this.dataDir = this._isWorkerMode ? null : path.join(process.cwd(), 'data')
+    this.pricingFile = this._isWorkerMode ? null : path.join(this.dataDir, 'model_pricing.json')
     this.pricingUrl = pricingSource.pricingUrl
     this.hashUrl = pricingSource.hashUrl
-    this.fallbackFile = path.join(
-      process.cwd(),
-      'resources',
-      'model-pricing',
-      'model_prices_and_context_window.json'
-    )
-    this.localHashFile = path.join(this.dataDir, 'model_pricing.sha256')
+    this.fallbackFile = this._isWorkerMode
+      ? null
+      : path.join(
+          process.cwd(),
+          'resources',
+          'model-pricing',
+          'model_prices_and_context_window.json'
+        )
+    this.localHashFile = this._isWorkerMode ? null : path.join(this.dataDir, 'model_pricing.sha256')
     this.pricingData = null
+    this._memoryHash = null
     this.lastUpdated = null
     this.updateInterval = 24 * 60 * 60 * 1000 // 24小时
     this.hashCheckInterval = 10 * 60 * 1000 // 10分钟哈希校验
@@ -46,6 +52,13 @@ class PricingService {
   // 初始化价格服务
   async initialize() {
     try {
+      if (this._isWorkerMode) {
+        // Workers 模式：直接从远端下载到内存，无 fs/timer
+        await this.checkAndUpdatePricing()
+        logger.success('Pricing service initialized (Workers mode)')
+        return
+      }
+
       // 确保data目录存在
       if (!fs.existsSync(this.dataDir)) {
         fs.mkdirSync(this.dataDir, { recursive: true })
@@ -99,6 +112,11 @@ class PricingService {
 
   // 检查是否需要更新
   needsUpdate() {
+    if (this._isWorkerMode) {
+      // Workers 模式：内存中无数据时需要更新
+      return !this.pricingData
+    }
+
     if (!fs.existsSync(this.pricingFile)) {
       logger.info('📋 Pricing file not found, will download')
       return true
@@ -130,6 +148,10 @@ class PricingService {
 
   // 哈希轮询设置
   setupHashCheck() {
+    if (this._isWorkerMode) {
+      return
+    }
+
     if (this.hashCheckTimer) {
       clearInterval(this.hashCheckTimer)
     }
@@ -176,6 +198,23 @@ class PricingService {
 
   // 获取远端哈希值
   fetchRemoteHash() {
+    if (this._isWorkerMode) {
+      return fetch(this.hashUrl, { signal: AbortSignal.timeout(30000) })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`哈希文件获取失败：HTTP ${response.status}`)
+          }
+          return response.text()
+        })
+        .then((data) => {
+          const hash = data.trim().split(/\s+/)[0]
+          if (!hash) {
+            throw new Error('哈希文件内容为空')
+          }
+          return hash
+        })
+    }
+
     return new Promise((resolve, reject) => {
       const request = https.get(this.hashUrl, (response) => {
         if (response.statusCode !== 200) {
@@ -213,6 +252,10 @@ class PricingService {
 
   // 计算本地文件哈希
   computeLocalHash() {
+    if (this._isWorkerMode) {
+      return this._memoryHash
+    }
+
     if (!fs.existsSync(this.pricingFile)) {
       return null
     }
@@ -230,6 +273,12 @@ class PricingService {
 
   // 写入本地哈希文件
   persistLocalHash(content) {
+    if (this._isWorkerMode) {
+      const hash = crypto.createHash('sha256').update(content).digest('hex')
+      this._memoryHash = hash
+      return hash
+    }
+
     const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')
     const hash = crypto.createHash('sha256').update(buffer).digest('hex')
     fs.writeFileSync(this.localHashFile, `${hash}\n`)
@@ -237,7 +286,21 @@ class PricingService {
   }
 
   // 实际的下载逻辑
-  _downloadFromRemote() {
+  async _downloadFromRemote() {
+    if (this._isWorkerMode) {
+      const response = await fetch(this.pricingUrl, { signal: AbortSignal.timeout(30000) })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      const rawContent = await response.text()
+      const jsonData = JSON.parse(rawContent)
+      this.pricingData = jsonData
+      this.lastUpdated = new Date()
+      this._memoryHash = crypto.createHash('sha256').update(rawContent).digest('hex')
+      logger.success(`Downloaded pricing data for ${Object.keys(jsonData).length} models`)
+      return
+    }
+
     return new Promise((resolve, reject) => {
       const request = https.get(this.pricingUrl, (response) => {
         if (response.statusCode !== 200) {
@@ -290,6 +353,19 @@ class PricingService {
 
   // 加载本地价格数据
   async loadPricingData() {
+    if (this._isWorkerMode) {
+      // Workers 模式：数据只在内存中，无本地文件
+      if (this.pricingData) {
+        logger.info(
+          `💰 Pricing data already in memory for ${Object.keys(this.pricingData).length} models`
+        )
+      } else {
+        logger.warn('💰 No pricing data in memory, will download')
+        await this.downloadPricingData()
+      }
+      return
+    }
+
     try {
       if (fs.existsSync(this.pricingFile)) {
         const data = fs.readFileSync(this.pricingFile, 'utf8')
@@ -313,6 +389,13 @@ class PricingService {
 
   // 使用fallback价格数据
   async useFallbackPricing() {
+    if (this._isWorkerMode) {
+      // Workers 模式：无本地 fallback 文件，设置空数据
+      logger.warn('⚠️  Workers mode: no local fallback available, pricing data is empty')
+      this.pricingData = {}
+      return
+    }
+
     try {
       if (fs.existsSync(this.fallbackFile)) {
         logger.info('📋 Copying fallback pricing data to data directory...')
@@ -761,6 +844,10 @@ class PricingService {
 
   // 设置文件监听器
   setupFileWatcher() {
+    if (this._isWorkerMode) {
+      return
+    }
+
     try {
       // 如果已有监听器，先关闭
       if (this.fileWatcher) {
@@ -822,6 +909,11 @@ class PricingService {
 
   // 重新加载价格数据
   async reloadPricingData() {
+    if (this._isWorkerMode) {
+      await this.downloadPricingData()
+      return
+    }
+
     try {
       // 验证文件是否存在
       if (!fs.existsSync(this.pricingFile)) {
@@ -866,6 +958,10 @@ class PricingService {
 
   // 清理资源
   cleanup() {
+    if (this._isWorkerMode) {
+      return
+    }
+
     if (this.updateTimer) {
       clearInterval(this.updateTimer)
       this.updateTimer = null

@@ -372,7 +372,7 @@ class ApiKeyService {
       }
 
       // 检查是否激活
-      if (keyData.isActive !== 'true') {
+      if (keyData.isActive !== 'true' && keyData.isActive !== true) {
         return { valid: false, error: 'API key is disabled' }
       }
 
@@ -566,7 +566,7 @@ class ApiKeyService {
       }
 
       // 检查是否激活
-      if (keyData.isActive !== 'true') {
+      if (keyData.isActive !== 'true' && keyData.isActive !== true) {
         const keyName = keyData.name || 'Unknown'
         return { valid: false, error: `API Key "${keyName}" 已被禁用`, keyName }
       }
@@ -1050,7 +1050,7 @@ class ApiKeyService {
       }
 
       // 2. 批量获取基础数据
-      let apiKeys = await redis.batchGetApiKeys(keyIds)
+      let apiKeys = (await redis.batchGetApiKeys(keyIds)).filter(Boolean)
 
       // 3. 过滤已删除的
       if (!includeDeleted) {

@@ -20,13 +20,15 @@ class BedrockAccountService {
     this._decryptCache = new LRUCache(500)
 
     // 🧹 定期清理缓存（每10分钟）
-    setInterval(
-      () => {
-        this._decryptCache.cleanup()
-        logger.info('🧹 Bedrock decrypt cache cleanup completed', this._decryptCache.getStats())
-      },
-      10 * 60 * 1000
-    )
+    if (process.env.WORKER_MODE !== 'true') {
+      setInterval(
+        () => {
+          this._decryptCache.cleanup()
+          logger.info('🧹 Bedrock decrypt cache cleanup completed', this._decryptCache.getStats())
+        },
+        10 * 60 * 1000
+      )
+    }
   }
 
   // 🏢 创建Bedrock账户

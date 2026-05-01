@@ -26,13 +26,15 @@ const SHARED_OPENAI_ACCOUNTS_KEY = 'shared_openai_accounts'
 const ACCOUNT_SESSION_MAPPING_PREFIX = 'openai_session_account_mapping:'
 
 // 🧹 定期清理缓存（每10分钟）
-setInterval(
-  () => {
-    encryptor.clearCache()
-    logger.info('🧹 OpenAI decrypt cache cleanup completed', encryptor.getStats())
-  },
-  10 * 60 * 1000
-)
+if (process.env.WORKER_MODE !== 'true') {
+  setInterval(
+    () => {
+      encryptor.clearCache()
+      logger.info('🧹 OpenAI decrypt cache cleanup completed', encryptor.getStats())
+    },
+    10 * 60 * 1000
+  )
+}
 
 function toNumberOrNull(value) {
   if (value === undefined || value === null || value === '') {

@@ -495,21 +495,7 @@ describe('ConcurrencyQueue Integration Tests', () => {
   // 第三部分：真实 Redis 集成测试（可选）
   // ============================================
   describe('Part 3: Real Redis Integration Tests', () => {
-    const skipRealRedis = !process.env.REDIS_TEST
-
-    // 辅助函数：检查 Redis 连接
-    async function checkRedisConnection() {
-      try {
-        const client = redis.getClient()
-        if (!client) {
-          return false
-        }
-        await client.ping()
-        return true
-      } catch {
-        return false
-      }
-    }
+    let skipRealRedis = !process.env.REDIS_TEST
 
     beforeAll(async () => {
       if (skipRealRedis) {
@@ -517,8 +503,16 @@ describe('ConcurrencyQueue Integration Tests', () => {
         return
       }
 
-      const connected = await checkRedisConnection()
-      if (!connected) {
+      try {
+        const client = redis.getClient()
+        if (!client) {
+          skipRealRedis = true
+          console.log('⚠️  Redis not connected, skipping real Redis tests')
+          return
+        }
+        await client.ping()
+      } catch {
+        skipRealRedis = true
         console.log('⚠️  Redis not connected, skipping real Redis tests')
       }
     })
@@ -546,9 +540,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
     })
 
     describe('Redis Queue Operations', () => {
-      const testOrSkip = skipRealRedis ? it.skip : it
-
-      testOrSkip('should atomically increment queue count with TTL', async () => {
+      it('should atomically increment queue count with TTL', async () => {
+        if (skipRealRedis) return
         const keyId = 'test-redis-queue-1'
         const timeoutMs = 5000
 
@@ -565,7 +558,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
         expect(ttl).toBeLessThanOrEqual(Math.ceil(timeoutMs / 1000) + 30)
       })
 
-      testOrSkip('should atomically decrement and delete when zero', async () => {
+      it('should atomically decrement and delete when zero', async () => {
+        if (skipRealRedis) return
         const keyId = 'test-redis-queue-2'
 
         await redis.incrConcurrencyQueue(keyId, 60000)
@@ -579,7 +573,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
         expect(exists).toBe(0)
       })
 
-      testOrSkip('should handle concurrent increments correctly', async () => {
+      it('should handle concurrent increments correctly', async () => {
+        if (skipRealRedis) return
         const keyId = 'test-redis-queue-3'
         const numRequests = 10
 
@@ -595,9 +590,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
     })
 
     describe('Redis Stats Operations', () => {
-      const testOrSkip = skipRealRedis ? it.skip : it
-
-      testOrSkip('should track queue statistics correctly', async () => {
+      it('should track queue statistics correctly', async () => {
+        if (skipRealRedis) return
         const keyId = 'test-redis-stats-1'
 
         await redis.incrConcurrencyQueueStats(keyId, 'entered')
@@ -613,7 +607,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
         expect(stats.cancelled).toBe(0)
       })
 
-      testOrSkip('should record and retrieve wait times', async () => {
+      it('should record and retrieve wait times', async () => {
+        if (skipRealRedis) return
         const keyId = 'test-redis-wait-1'
         const waitTimes = [100, 200, 150, 300, 250]
 
@@ -628,7 +623,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
         expect(recorded[0]).toBe(250) // 最后插入的在前面
       })
 
-      testOrSkip('should record global wait times', async () => {
+      it('should record global wait times', async () => {
+        if (skipRealRedis) return
         const waitTimes = [500, 600, 700]
 
         for (const wt of waitTimes) {
@@ -642,9 +638,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
     })
 
     describe('Redis Cleanup Operations', () => {
-      const testOrSkip = skipRealRedis ? it.skip : it
-
-      testOrSkip('should clear specific queue', async () => {
+      it('should clear specific queue', async () => {
+        if (skipRealRedis) return
         const keyId = 'test-redis-clear-1'
 
         await redis.incrConcurrencyQueue(keyId, 60000)
@@ -657,7 +652,8 @@ describe('ConcurrencyQueue Integration Tests', () => {
         expect(count).toBe(0)
       })
 
-      testOrSkip('should clear all queues but preserve stats', async () => {
+      it('should clear all queues but preserve stats', async () => {
+        if (skipRealRedis) return
         const keyId1 = 'test-redis-clearall-1'
         const keyId2 = 'test-redis-clearall-2'
 

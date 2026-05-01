@@ -93,11 +93,13 @@ function compareVersions(current, latest) {
 router.get('/check-updates', authenticateAdmin, async (req, res) => {
   // 读取当前版本
   const versionPath = path.join(__dirname, '../../../VERSION')
-  let currentVersion = '1.0.0'
-  try {
-    currentVersion = fs.readFileSync(versionPath, 'utf8').trim()
-  } catch (err) {
-    logger.warn('⚠️ Could not read VERSION file:', err.message)
+  let currentVersion = process.env.APP_VERSION || '1.0.0'
+  if (currentVersion === '1.0.0') {
+    try {
+      currentVersion = fs.readFileSync(versionPath, 'utf8').trim()
+    } catch (_err) {
+      // VERSION file not available (e.g. Workers mode)
+    }
   }
 
   try {

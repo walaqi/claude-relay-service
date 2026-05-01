@@ -206,13 +206,15 @@ async function countTokensAntigravity(client, contents, model, proxyConfig = nul
 }
 
 // 🧹 定期清理缓存（每10分钟）
-setInterval(
-  () => {
-    encryptor.clearCache()
-    logger.info('🧹 Gemini decrypt cache cleanup completed', encryptor.getStats())
-  },
-  10 * 60 * 1000
-)
+if (process.env.WORKER_MODE !== 'true') {
+  setInterval(
+    () => {
+      encryptor.clearCache()
+      logger.info('🧹 Gemini decrypt cache cleanup completed', encryptor.getStats())
+    },
+    10 * 60 * 1000
+  )
+}
 
 // 创建 OAuth2 客户端（支持代理配置）
 function createOAuth2Client(redirectUri = null, proxyConfig = null, oauthProvider = null) {
