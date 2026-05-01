@@ -63,6 +63,13 @@ async function impitRequest(method, url, data, options = {}) {
     init.redirect = 'manual'
   }
 
+  logger.debug(`🌐 [tlsFetch] ${method} ${url}`, {
+    headers: init.headers,
+    body: init.body ? `${init.body.substring(0, 200)}...` : undefined,
+    redirect: init.redirect,
+    proxyUrl: proxyUrl || 'direct'
+  })
+
   const response = await client.fetch(url, init)
 
   const text = await response.text()
@@ -82,6 +89,12 @@ async function impitRequest(method, url, data, options = {}) {
   }
 
   if (!response.ok) {
+    logger.warn(`🌐 [tlsFetch] ${method} ${url} → ${response.status}`, {
+      requestHeaders: init.headers,
+      requestBody: init.body ? `${init.body.substring(0, 500)}` : undefined,
+      responseStatus: response.status,
+      responseData: typeof parsedData === 'string' ? parsedData.substring(0, 500) : parsedData
+    })
     const error = new Error(`Request failed with status ${response.status}`)
     error.response = result
     throw error

@@ -41,7 +41,7 @@ function isProAccount(info) {
 
 class ClaudeAccountService {
   constructor() {
-    this.claudeApiUrl = 'https://console.anthropic.com/v1/oauth/token'
+    this.claudeApiUrl = config.claude.oauthTokenUrl
     this.claudeOauthClientId = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
     let maxWarnings = parseInt(process.env.CLAUDE_5H_WARNING_MAX_NOTIFICATIONS || '', 10)
 
@@ -317,10 +317,7 @@ class ClaudeAccountService {
         {
           headers: {
             'Content-Type': 'application/json',
-            Accept: 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            Referer: 'https://claude.ai/',
-            Origin: 'https://claude.ai'
+            Accept: 'application/json'
           },
           timeout: 30000,
           proxyConfig: accountData.proxy

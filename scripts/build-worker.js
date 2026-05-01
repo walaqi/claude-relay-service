@@ -127,7 +127,8 @@ build({
           'winston-daily-rotate-file',
           'node-cron',
           'nodemailer',
-          'ioredis'
+          'ioredis',
+          'impit'
         ]
         for (const mod of incompatible) {
           build.onResolve({ filter: new RegExp(`^${mod}$`) }, () => ({

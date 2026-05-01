@@ -108,7 +108,7 @@ router.get('/check-updates', authenticateAdmin, async (req, res) => {
     const cached = await redis.getClient().get(cacheKey)
 
     if (cached && !req.query.force) {
-      const cachedData = JSON.parse(cached)
+      const cachedData = typeof cached === 'string' ? JSON.parse(cached) : cached
       const cacheAge = Date.now() - cachedData.timestamp
 
       // 缓存有效期1小时

@@ -180,3 +180,15 @@ impit 提供 linux-x64-gnu、linux-x64-musl（Alpine Docker）、darwin-arm64、
 - `src/services/account/claudeAccountService.js` — 修改 3 处 axios 调用
 - `src/utils/proxyHelper.js` — 参考代理格式，fallback 时复用 `createProxyAgent`
 - `package.json` — 添加 impit 依赖
+
+
+## 重点关注
+
+impit 是 Rust 原生绑定（.node 二进制），无法在 Workers V8 isolate 中运行。但这不是问题：
+
+Worker 模式下不需要 impit。 Cloudflare Workers 的 fetch() 是 Cloudflare 自己的实现，TLS 握手发生在 Cloudflare 边缘节点，JA3/JA4 指纹是 Cloudflare 的，不是 Node.js 的。导致 403 的根本原因（Node.js TLS 指纹被识别为非浏览器）在 Worker 环境中不存在。
+
+所以当前的 fallback 设计恰好是正确的分工：
+
+Node.js 模式：impit 加载成功 → 用 Chrome TLS 指纹绕过 Cloudflare 检测
+Worker 模式：impit 加载失败 → fallback 到 axios → 但请求从 Cloudflare 边缘发出，本身就不会被 TLS 指纹拦截(**这一点需要重点关注并等待验证**)
