@@ -5,7 +5,7 @@
 
 const crypto = require('crypto')
 const ProxyHelper = require('./proxyHelper')
-const axios = require('axios')
+const tlsFetchClient = require('./tlsFetchClient')
 const logger = require('./logger')
 
 // OAuth 配置常量 - 从claude-code-login.js提取
@@ -161,11 +161,8 @@ async function exchangeCodeForTokens(authorizationCode, codeVerifier, state, pro
     state
   }
 
-  // 创建代理agent
-  const agent = createProxyAgent(proxyConfig)
-
   try {
-    if (agent) {
+    if (proxyConfig) {
       logger.info(
         `🌐 Using proxy for OAuth token exchange: ${ProxyHelper.maskProxyInfo(proxyConfig)}`
       )
@@ -181,25 +178,17 @@ async function exchangeCodeForTokens(authorizationCode, codeVerifier, state, pro
       proxyType: proxyConfig?.type || 'none'
     })
 
-    const axiosConfig = {
+    const response = await tlsFetchClient.post(OAUTH_CONFIG.TOKEN_URL, params, {
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'claude-cli/1.0.56 (external, cli)',
         Accept: 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
         Referer: 'https://claude.ai/',
         Origin: 'https://claude.ai'
       },
-      timeout: 30000
-    }
-
-    if (agent) {
-      axiosConfig.httpAgent = agent
-      axiosConfig.httpsAgent = agent
-      axiosConfig.proxy = false
-    }
-
-    const response = await axios.post(OAUTH_CONFIG.TOKEN_URL, params, axiosConfig)
+      timeout: 30000,
+      proxyConfig
+    })
 
     // 记录完整的响应数据到专门的认证详细日志
     logger.authDetail('OAuth token exchange response', response.data)
@@ -381,11 +370,8 @@ async function exchangeSetupTokenCode(authorizationCode, codeVerifier, state, pr
     expires_in: 31536000 // Setup Token 可以设置较长的过期时间
   }
 
-  // 创建代理agent
-  const agent = createProxyAgent(proxyConfig)
-
   try {
-    if (agent) {
+    if (proxyConfig) {
       logger.info(
         `🌐 Using proxy for Setup Token exchange: ${ProxyHelper.maskProxyInfo(proxyConfig)}`
       )
@@ -401,25 +387,17 @@ async function exchangeSetupTokenCode(authorizationCode, codeVerifier, state, pr
       proxyType: proxyConfig?.type || 'none'
     })
 
-    const axiosConfig = {
+    const response = await tlsFetchClient.post(OAUTH_CONFIG.TOKEN_URL, params, {
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'claude-cli/1.0.56 (external, cli)',
         Accept: 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
         Referer: 'https://claude.ai/',
         Origin: 'https://claude.ai'
       },
-      timeout: 30000
-    }
-
-    if (agent) {
-      axiosConfig.httpAgent = agent
-      axiosConfig.httpsAgent = agent
-      axiosConfig.proxy = false
-    }
-
-    const response = await axios.post(OAUTH_CONFIG.TOKEN_URL, params, axiosConfig)
+      timeout: 30000,
+      proxyConfig
+    })
 
     // 记录完整的响应数据到专门的认证详细日志
     logger.authDetail('Setup Token exchange response', response.data)
@@ -608,10 +586,9 @@ function buildCookieHeaders(sessionKey) {
  */
 async function getOrganizationInfo(sessionKey, proxyConfig = null) {
   const headers = buildCookieHeaders(sessionKey)
-  const agent = createProxyAgent(proxyConfig)
 
   try {
-    if (agent) {
+    if (proxyConfig) {
       logger.info(`🌐 Using proxy for organization info: ${ProxyHelper.maskProxyInfo(proxyConfig)}`)
     }
 
@@ -620,19 +597,12 @@ async function getOrganizationInfo(sessionKey, proxyConfig = null) {
       hasProxy: !!proxyConfig
     })
 
-    const axiosConfig = {
+    const response = await tlsFetchClient.get(COOKIE_OAUTH_CONFIG.ORGANIZATIONS_URL, {
       headers,
       timeout: 30000,
-      maxRedirects: 0 // 禁止自动重定向，以便检测Cloudflare拦截(302)
-    }
-
-    if (agent) {
-      axiosConfig.httpAgent = agent
-      axiosConfig.httpsAgent = agent
-      axiosConfig.proxy = false
-    }
-
-    const response = await axios.get(COOKIE_OAUTH_CONFIG.ORGANIZATIONS_URL, axiosConfig)
+      maxRedirects: 0,
+      proxyConfig
+    })
 
     if (!response.data || !Array.isArray(response.data)) {
       throw new Error('获取组织信息失败：响应格式无效')
@@ -728,10 +698,8 @@ async function authorizeWithCookie(sessionKey, organizationUuid, scope, proxyCon
     'Content-Type': 'application/json'
   }
 
-  const agent = createProxyAgent(proxyConfig)
-
   try {
-    if (agent) {
+    if (proxyConfig) {
       logger.info(
         `🌐 Using proxy for Cookie authorization: ${ProxyHelper.maskProxyInfo(proxyConfig)}`
       )
@@ -743,19 +711,12 @@ async function authorizeWithCookie(sessionKey, organizationUuid, scope, proxyCon
       hasProxy: !!proxyConfig
     })
 
-    const axiosConfig = {
+    const response = await tlsFetchClient.post(authorizeUrl, payload, {
       headers,
       timeout: 30000,
-      maxRedirects: 0 // 禁止自动重定向，以便检测Cloudflare拦截(302)
-    }
-
-    if (agent) {
-      axiosConfig.httpAgent = agent
-      axiosConfig.httpsAgent = agent
-      axiosConfig.proxy = false
-    }
-
-    const response = await axios.post(authorizeUrl, payload, axiosConfig)
+      maxRedirects: 0,
+      proxyConfig
+    })
 
     // 从响应中获取redirect_uri
     const redirectUri = response.data?.redirect_uri

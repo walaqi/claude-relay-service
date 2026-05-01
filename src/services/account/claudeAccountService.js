@@ -1,7 +1,7 @@
 const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
 const ProxyHelper = require('../../utils/proxyHelper')
-const axios = require('axios')
+const tlsFetchClient = require('../../utils/tlsFetchClient')
 const redis = require('../../models/redis')
 const config = require('../../../config/config')
 const logger = require('../../utils/logger')
@@ -219,8 +219,7 @@ class ClaudeAccountService {
 
       if (hasProfileScope) {
         try {
-          const agent = this._createProxyAgent(proxy)
-          await this.fetchAndUpdateAccountProfile(accountId, claudeAiOauth.accessToken, agent)
+          await this.fetchAndUpdateAccountProfile(accountId, claudeAiOauth.accessToken)
           logger.info(`📊 Successfully fetched profile info for new account: ${name}`)
         } catch (profileError) {
           logger.warn(`⚠️ Failed to fetch profile info for new account: ${profileError.message}`)
@@ -308,35 +307,24 @@ class ClaudeAccountService {
       logRefreshStart(accountId, accountData.name, 'claude', 'manual_refresh')
       logger.info(`🔄 Starting token refresh for account: ${accountData.name} (${accountId})`)
 
-      // 创建代理agent
-      const agent = this._createProxyAgent(accountData.proxy)
-
-      const axiosConfig = {
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/plain, */*',
-          'User-Agent': 'claude-cli/1.0.56 (external, cli)',
-          'Accept-Language': 'en-US,en;q=0.9',
-          Referer: 'https://claude.ai/',
-          Origin: 'https://claude.ai'
-        },
-        timeout: 30000
-      }
-
-      if (agent) {
-        axiosConfig.httpAgent = agent
-        axiosConfig.httpsAgent = agent
-        axiosConfig.proxy = false
-      }
-
-      const response = await axios.post(
+      const response = await tlsFetchClient.post(
         this.claudeApiUrl,
         {
           grant_type: 'refresh_token',
           refresh_token: refreshToken,
           client_id: this.claudeOauthClientId
         },
-        axiosConfig
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            Referer: 'https://claude.ai/',
+            Origin: 'https://claude.ai'
+          },
+          timeout: 30000,
+          proxyConfig: accountData.proxy
+        }
       )
 
       if (response.status === 200) {
@@ -389,7 +377,7 @@ class ClaudeAccountService {
 
         if (hasProfileScope) {
           try {
-            await this.fetchAndUpdateAccountProfile(accountId, access_token, agent)
+            await this.fetchAndUpdateAccountProfile(accountId, access_token)
           } catch (profileError) {
             logger.warn(`⚠️ Failed to fetch profile info after refresh: ${profileError.message}`)
           }
@@ -2029,45 +2017,30 @@ class ClaudeAccountService {
   }
 
   // 📊 获取 OAuth Usage 数据
-  async fetchOAuthUsage(accountId, accessToken = null, agent = null) {
+  async fetchOAuthUsage(accountId, accessToken = null) {
     try {
       const accountData = await redis.getClaudeAccount(accountId)
       if (!accountData || Object.keys(accountData).length === 0) {
         throw new Error('Account not found')
       }
 
-      // 如果没有提供 accessToken，使用 getValidAccessToken 自动检查过期并刷新
       if (!accessToken) {
         accessToken = await this.getValidAccessToken(accountId)
       }
 
-      // 如果没有提供 agent，创建代理
-      if (!agent) {
-        agent = this._createProxyAgent(accountData.proxy)
-      }
-
       logger.debug(`📊 Fetching OAuth usage for account: ${accountData.name} (${accountId})`)
 
-      // 请求 OAuth usage 接口
-      const axiosConfig = {
+      const response = await tlsFetchClient.get('https://api.anthropic.com/api/oauth/usage', {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
           'anthropic-beta': 'oauth-2025-04-20',
-          'User-Agent': 'claude-cli/2.0.53 (external, cli)',
           'Accept-Language': 'en-US,en;q=0.9'
         },
-        timeout: 15000
-      }
-
-      if (agent) {
-        axiosConfig.httpAgent = agent
-        axiosConfig.httpsAgent = agent
-        axiosConfig.proxy = false
-      }
-
-      const response = await axios.get('https://api.anthropic.com/api/oauth/usage', axiosConfig)
+        timeout: 15000,
+        proxyConfig: accountData.proxy
+      })
 
       if (response.status === 200 && response.data) {
         logger.debug('✅ Successfully fetched OAuth usage data:', {
@@ -2203,14 +2176,13 @@ class ClaudeAccountService {
   }
 
   // 📊 获取账号 Profile 信息并更新账号类型
-  async fetchAndUpdateAccountProfile(accountId, accessToken = null, agent = null) {
+  async fetchAndUpdateAccountProfile(accountId, accessToken = null) {
     try {
       const accountData = await redis.getClaudeAccount(accountId)
       if (!accountData || Object.keys(accountData).length === 0) {
         throw new Error('Account not found')
       }
 
-      // 检查账户是否有 user:profile 权限
       const hasProfileScope = accountData.scopes && accountData.scopes.includes('user:profile')
       if (!hasProfileScope) {
         logger.warn(
@@ -2219,7 +2191,6 @@ class ClaudeAccountService {
         throw new Error('Account does not have user:profile permission')
       }
 
-      // 如果没有提供 accessToken，使用账号存储的 token
       if (!accessToken) {
         accessToken = this._decryptSensitiveData(accountData.accessToken)
         if (!accessToken) {
@@ -2227,32 +2198,18 @@ class ClaudeAccountService {
         }
       }
 
-      // 如果没有提供 agent，创建代理
-      if (!agent) {
-        agent = this._createProxyAgent(accountData.proxy)
-      }
-
       logger.info(`📊 Fetching profile info for account: ${accountData.name} (${accountId})`)
 
-      // 请求 profile 接口
-      const axiosConfig = {
+      const response = await tlsFetchClient.get('https://api.anthropic.com/api/oauth/profile', {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          'User-Agent': 'claude-cli/1.0.56 (external, cli)',
           'Accept-Language': 'en-US,en;q=0.9'
         },
-        timeout: 15000
-      }
-
-      if (agent) {
-        axiosConfig.httpAgent = agent
-        axiosConfig.httpsAgent = agent
-        axiosConfig.proxy = false
-      }
-
-      const response = await axios.get('https://api.anthropic.com/api/oauth/profile', axiosConfig)
+        timeout: 15000,
+        proxyConfig: accountData.proxy
+      })
 
       if (response.status === 200 && response.data) {
         const profileData = response.data

@@ -389,9 +389,7 @@ class UpstashRedisClient {
     }
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     const keys = await this.scanKeys('apikey:*')
-    return keys
-      .map((k) => k.replace(/^apikey:/, ''))
-      .filter((id) => uuidPattern.test(id))
+    return keys.map((k) => k.replace(/^apikey:/, '')).filter((id) => uuidPattern.test(id))
   }
 
   // PLACEHOLDER_APIKEY_METHODS
@@ -1480,8 +1478,12 @@ class UpstashRedisClient {
 
   async get(key) {
     const val = await this.client.get(key)
-    if (val === null || val === undefined) return null
-    if (typeof val === 'string') return val
+    if (val === null || val === undefined) {
+      return null
+    }
+    if (typeof val === 'string') {
+      return val
+    }
     return JSON.stringify(val)
   }
 
