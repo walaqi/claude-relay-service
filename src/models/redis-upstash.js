@@ -991,10 +991,22 @@ class UpstashRedisClient {
       return null
     }
     const result = { ...data }
-    const boolFields = ['isActive', 'isPro', 'isTeam', 'enableStreaming', 'disabled']
+    // Keep boolean-like fields as strings to match ioredis hgetall behavior.
+    // The codebase compares these with === 'true' / === 'false' everywhere.
+    const boolFields = [
+      'isActive',
+      'isPro',
+      'isTeam',
+      'enableStreaming',
+      'disabled',
+      'schedulable',
+      'rateLimitAutoStopped',
+      'blockedAutoStopped',
+      'fiveHourAutoStopped'
+    ]
     for (const f of boolFields) {
-      if (f in result) {
-        result[f] = result[f] === 'true' || result[f] === true
+      if (f in result && typeof result[f] !== 'string') {
+        result[f] = String(result[f])
       }
     }
     const numFields = ['maxConcurrency', 'weight', 'priority', 'dailyCostLimit']
@@ -2043,12 +2055,19 @@ class UpstashRedisClient {
     if (indexMembers && indexMembers.length > 0) {
       return indexMembers
     }
+    const emptyMarker = await this.client.get(`${indexKey}:empty`)
+    if (emptyMarker) {
+      return []
+    }
     if (!scanPattern) {
       return []
     }
     const keys = await this.scanKeys(scanPattern)
     const ids = []
     for (const key of keys) {
+      if (key === indexKey || key.startsWith(`${indexKey}:`)) {
+        continue
+      }
       if (extractRegex) {
         const match = key.match(extractRegex)
         if (match && match[1]) {

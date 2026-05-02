@@ -1063,8 +1063,7 @@ class ApiKeyService {
 
       // 5. 合并数据
       for (const key of apiKeys) {
-        const stats =
-          (statsMap instanceof Map ? statsMap.get(key.id) : statsMap[key.id]) || {}
+        const stats = (statsMap instanceof Map ? statsMap.get(key.id) : statsMap[key.id]) || {}
 
         // 处理 usage 数据
         const usageTotal = stats.usageTotal || {}

@@ -72,6 +72,7 @@ class ClaudeRelayService {
         .split(',')
         .map((p) => p.trim())
         .filter(Boolean)
+        .filter((p) => !p.startsWith('context-1m'))
         .forEach(addBeta)
     }
 
@@ -1085,6 +1086,11 @@ class ClaudeRelayService {
     const processedBody = safeClone(body)
 
     processedBody.messages = this._patchOrphanedToolUse(processedBody.messages)
+
+    // Strip [1m] suffix before sending to upstream — no longer a valid model variant
+    if (typeof processedBody.model === 'string') {
+      processedBody.model = processedBody.model.replace(/\[1m\]$/i, '')
+    }
 
     // 验证并限制max_tokens参数
     this._validateAndLimitMaxTokens(processedBody)

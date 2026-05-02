@@ -1537,8 +1537,11 @@ router.get('/v1/models', authenticateApiKey, async (req, res) => {
 
     const modelService = require('../services/modelService')
 
-    // 从 modelService 获取所有支持的模型
-    const models = modelService.getAllModels()
+    let models = modelService.getAllModels()
+    if (models.length === 0) {
+      await modelService.refreshModels()
+      models = modelService.getAllModels()
+    }
 
     // 可选：根据 API Key 的模型限制过滤
     let filteredModels = models

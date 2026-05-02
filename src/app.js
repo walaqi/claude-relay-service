@@ -102,6 +102,7 @@ class Application {
       logger.info('🔄 Initializing model service...')
       const modelService = require('./services/modelService')
       await modelService.initialize()
+      modelService.startPeriodicRefresh()
 
       // 📊 初始化缓存监控
       await this.initializeCacheMonitoring()

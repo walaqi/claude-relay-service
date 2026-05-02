@@ -9,6 +9,8 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+.dev.vars
+.prod.vars
 
 # Claude specific directories
 .claude/

@@ -1200,10 +1200,14 @@ class UnifiedClaudeScheduler {
     const mappingData = await client.get(`${this.SESSION_MAPPING_PREFIX}${sessionHash}`)
 
     if (mappingData) {
+      if (typeof mappingData === 'object') {
+        return mappingData
+      }
       try {
         return JSON.parse(mappingData)
       } catch (error) {
-        logger.warn('⚠️ Failed to parse session mapping:', error)
+        logger.warn('⚠️ Failed to parse session mapping, deleting corrupt key:', error)
+        await client.del(`${this.SESSION_MAPPING_PREFIX}${sessionHash}`).catch(() => {})
         return null
       }
     }

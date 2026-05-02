@@ -7,14 +7,16 @@ import rateLimitCleanupService from './services/rateLimitCleanupService'
 import userMessageQueueService from './services/userMessageQueueService'
 import pricingService from './services/pricingService'
 
-let appInitialized = false
+let initPromise = null
 
 async function ensureApp() {
-  if (!appInitialized) {
-    await appWorker.initialize()
-    appWorker.listen(3000)
-    appInitialized = true
+  if (!initPromise) {
+    initPromise = (async () => {
+      await appWorker.initialize()
+      appWorker.listen(3000)
+    })()
   }
+  await initPromise
 }
 
 async function handleScheduledTask(cron) {

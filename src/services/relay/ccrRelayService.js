@@ -119,7 +119,7 @@ class CcrRelayService {
       // 创建修改后的请求体，使用去前缀后的模型名
       const modifiedRequestBody = {
         ...requestBody,
-        model: mappedModel
+        model: mappedModel.replace(/\[1m\]$/i, '')
       }
 
       // 创建代理agent
@@ -483,7 +483,7 @@ class CcrRelayService {
       // 创建修改后的请求体，使用去前缀后的模型名
       const modifiedRequestBody = {
         ...requestBody,
-        model: mappedModel
+        model: mappedModel.replace(/\[1m\]$/i, '')
       }
 
       // 创建代理agent
@@ -947,7 +947,18 @@ class CcrRelayService {
     for (const [key, value] of Object.entries(clientHeaders)) {
       const lowerKey = key.toLowerCase()
       if (allowedHeaders.includes(lowerKey)) {
-        filteredHeaders[key] = value
+        if (lowerKey === 'anthropic-beta' && typeof value === 'string') {
+          const filtered = value
+            .split(',')
+            .map((p) => p.trim())
+            .filter((p) => p && !p.startsWith('context-1m'))
+            .join(',')
+          if (filtered) {
+            filteredHeaders[key] = filtered
+          }
+        } else {
+          filteredHeaders[key] = value
+        }
       }
     }
 

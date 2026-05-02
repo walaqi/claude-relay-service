@@ -530,10 +530,16 @@ class UnifiedGeminiScheduler {
     const mappingData = key ? await client.get(key) : null
 
     if (mappingData) {
+      if (typeof mappingData === 'object') {
+        return mappingData
+      }
       try {
         return JSON.parse(mappingData)
       } catch (error) {
-        logger.warn('⚠️ Failed to parse session mapping:', error)
+        logger.warn('⚠️ Failed to parse session mapping, deleting corrupt key:', error)
+        if (key) {
+          await client.del(key).catch(() => {})
+        }
         return null
       }
     }

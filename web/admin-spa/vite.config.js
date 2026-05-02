@@ -5,6 +5,9 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import { fileURLToPath, URL } from 'node:url'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
 
 export default defineConfig(({ mode }) => {
   // 加载环境变量
@@ -21,13 +24,16 @@ export default defineConfig(({ mode }) => {
     secure: false
   }
 
-  // 如果设置了代理，动态导入并配置 agent（仅在开发模式下）
+  // HTTPS target + HTTP proxy: http-proxy needs an explicit agent for CONNECT tunneling
   if (httpProxy && mode === 'development') {
     console.log(`Using HTTP proxy: ${httpProxy}`)
-    // Vite 的 proxy 使用 http-proxy，它支持通过环境变量自动使用代理
-    // 设置环境变量让 http-proxy 使用代理
-    process.env.HTTP_PROXY = httpProxy
-    process.env.HTTPS_PROXY = httpProxy
+    if (apiTarget.startsWith('https://')) {
+      const { HttpsProxyAgent } = require('https-proxy-agent')
+      proxyConfig.agent = new HttpsProxyAgent(httpProxy)
+    } else {
+      process.env.HTTP_PROXY = httpProxy
+      process.env.HTTPS_PROXY = httpProxy
+    }
   }
 
   console.log(

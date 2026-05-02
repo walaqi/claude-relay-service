@@ -116,10 +116,8 @@ class BedrockAccountService {
         return { success: false, error: 'Account not found' }
       }
 
-      const account = JSON.parse(accountData)
-
-      // 根据凭证类型解密对应的凭证
-      // 增强逻辑：优先按照 credentialType 解密，如果字段不存在则尝试解密实际存在的字段（兜底）
+      const account =
+        typeof accountData === 'string' ? JSON.parse(accountData) : accountData
       try {
         let accessKeyDecrypted = false
         let bearerTokenDecrypted = false
@@ -227,7 +225,9 @@ class BedrockAccountService {
       for (let i = 0; i < keys.length; i++) {
         const accountData = dataList[i]
         if (accountData) {
-          const account = JSON.parse(accountData)
+          const account =
+            typeof accountData === 'string' ? JSON.parse(accountData) : accountData
+          if (!account || !account.id) continue
 
           // 返回给前端时，不包含敏感信息，只显示掩码
           accounts.push({
@@ -288,9 +288,8 @@ class BedrockAccountService {
         return { success: false, error: 'Account not found' }
       }
 
-      const account = JSON.parse(accountData)
-
-      // 更新字段
+      const account =
+        typeof accountData === 'string' ? JSON.parse(accountData) : accountData
       if (updates.name !== undefined) {
         account.name = updates.name
       }
