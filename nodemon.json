@@ -1,5 +1,0 @@
-{
-  "watch": ["src"],
-  "ext": "js,json",
-  "exec": "npm run lint && node src/app.js"
-}
