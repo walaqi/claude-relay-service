@@ -251,3 +251,5 @@ web/apiStats/
 web/admin-spa/dist/
 
 .serena/
+
+memo.md
