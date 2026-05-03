@@ -11,6 +11,7 @@ pnpm-debug.log*
 !.env.example
 .dev.vars
 .prod.vars
+cf-info.md
 
 # Claude specific directories
 .claude/
