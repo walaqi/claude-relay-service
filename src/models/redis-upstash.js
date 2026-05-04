@@ -1394,6 +1394,25 @@ class UpstashRedisClient {
     return this.client.eval(script, [key], [now])
   }
 
+  async batchGetConcurrency(apiKeyIds) {
+    if (!apiKeyIds || apiKeyIds.length === 0) {
+      return []
+    }
+    const now = Date.now()
+    const script = `
+      local key = KEYS[1]
+      local now = tonumber(ARGV[1])
+      redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+      return redis.call('ZCARD', key)
+    `
+    const p = this._pipeline()
+    for (const id of apiKeyIds) {
+      p.eval(script, [`concurrency:${id}`], [now])
+    }
+    const results = await p.exec()
+    return results.map((r) => r[1])
+  }
+
   async incrConsoleAccountConcurrency(accountId, requestId, leaseSeconds = null) {
     return this.incrConcurrency(`console_account:${accountId}`, requestId, leaseSeconds)
   }

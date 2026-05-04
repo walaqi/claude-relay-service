@@ -407,8 +407,9 @@ async function handleMessagesRequest(req, res) {
       }
 
       // 🔥 预热请求拦截检查（在转发之前）
+      let account = null
       if (accountType === 'claude-official' || accountType === 'claude-console') {
-        const account =
+        account =
           accountType === 'claude-official'
             ? await claudeAccountService.getAccount(accountId)
             : await claudeConsoleAccountService.getAccount(accountId)
@@ -556,7 +557,9 @@ async function handleMessagesRequest(req, res) {
                 JSON.stringify(usageData)
               )
             }
-          }
+          },
+          null,
+          { preSelectedAccount: { accountId, accountType, accountData: account } }
         )
       } else if (accountType === 'claude-console') {
         // Claude Console账号使用Console转发服务（需要传递accountId）
@@ -693,7 +696,9 @@ async function handleMessagesRequest(req, res) {
               )
             }
           },
-          accountId
+          accountId,
+          null,
+          { accountData: account }
         )
       } else if (accountType === 'bedrock') {
         // Bedrock账号使用Bedrock转发服务
@@ -1112,15 +1117,19 @@ async function handleMessagesRequest(req, res) {
       }
 
       // 🔥 预热请求拦截检查（非流式，在转发之前）
+      let accountNonStream = null
       if (accountType === 'claude-official' || accountType === 'claude-console') {
-        const account =
+        accountNonStream =
           accountType === 'claude-official'
             ? await claudeAccountService.getAccount(accountId)
             : await claudeConsoleAccountService.getAccount(accountId)
 
-        if (account?.interceptWarmup === 'true' && isWarmupRequest(_requestBodyNonStream)) {
+        if (
+          accountNonStream?.interceptWarmup === 'true' &&
+          isWarmupRequest(_requestBodyNonStream)
+        ) {
           logger.api(
-            `🔥 Warmup request intercepted (non-stream) for account: ${account.name} (${accountId})`
+            `🔥 Warmup request intercepted (non-stream) for account: ${accountNonStream.name} (${accountId})`
           )
           return res.json(buildMockWarmupResponse(_requestBodyNonStream.model))
         }
@@ -1139,7 +1148,8 @@ async function handleMessagesRequest(req, res) {
           _apiKeyNonStream,
           req, // clientRequest 用于断开检测，保留但服务层已优化
           res,
-          _headersNonStream
+          _headersNonStream,
+          { preSelectedAccount: { accountId, accountType, accountData: accountNonStream } }
         )
       } else if (accountType === 'claude-console') {
         // Claude Console账号使用Console转发服务
@@ -1152,7 +1162,8 @@ async function handleMessagesRequest(req, res) {
           req, // clientRequest 保留用于断开检测
           res,
           _headersNonStream,
-          accountId
+          accountId,
+          { accountData: accountNonStream }
         )
       } else if (accountType === 'bedrock') {
         // Bedrock账号使用Bedrock转发服务

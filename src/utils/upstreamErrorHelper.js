@@ -493,9 +493,63 @@ const sanitizeErrorForClient = (errorData) => {
   }
 }
 
+const batchCheckTempUnavailable = async (accounts) => {
+  if (!accounts || accounts.length === 0) {
+    return new Map()
+  }
+
+  const redis = getRedis()
+  const client = redis.getClientSafe()
+  if (!client) {
+    return new Map(
+      accounts.map(({ accountId, accountType }) => [`${accountType}:${accountId}`, false])
+    )
+  }
+
+  const pipeline = client.pipeline()
+  const entries = accounts.map(({ accountId, accountType }) => ({
+    key: `${TEMP_UNAVAILABLE_PREFIX}:${accountType}:${accountId}`,
+    mapKey: `${accountType}:${accountId}`
+  }))
+
+  for (const { key } of entries) {
+    pipeline.ttl(key)
+  }
+
+  const results = await pipeline.exec()
+  const map = new Map()
+
+  const keysToClean = []
+  entries.forEach(({ mapKey, key }, i) => {
+    const ttl = results[i]?.[1] ?? -2
+    if (ttl === -1) {
+      keysToClean.push(key)
+    }
+    map.set(mapKey, ttl > 0)
+  })
+
+  if (keysToClean.length > 0) {
+    try {
+      const cleanPipeline = client.pipeline()
+      for (const k of keysToClean) {
+        cleanPipeline.del(k)
+      }
+      await cleanPipeline.exec()
+      logger.warn(
+        `⚠️ [UpstreamError] Batch-cleaned ${keysToClean.length} temp_unavailable key(s) without TTL`
+      )
+    } catch (e) {
+      logger.warn(`⚠️ [UpstreamError] Failed to batch-clean stale keys: ${e.message}`)
+    }
+  }
+
+  return map
+}
+
 module.exports = {
   markTempUnavailable,
   isTempUnavailable,
+  batchCheckTempUnavailable,
   clearTempUnavailable,
   getAllTempUnavailable,
   classifyError,

@@ -473,9 +473,9 @@ class ClaudeAccountService {
   }
 
   // 🎯 获取有效的访问token
-  async getValidAccessToken(accountId) {
+  async getValidAccessToken(accountId, existingAccountData = null) {
     try {
-      const accountData = await redis.getClaudeAccount(accountId)
+      const accountData = existingAccountData || (await redis.getClaudeAccount(accountId))
 
       if (!accountData || Object.keys(accountData).length === 0) {
         throw new Error('Account not found')
@@ -1521,11 +1521,11 @@ class ClaudeAccountService {
   }
 
   // ✅ 清除账号的 Opus 限流状态
-  async clearAccountOpusRateLimit(accountId) {
+  async clearAccountOpusRateLimit(accountId, existingAccountData = null) {
     try {
-      const accountData = await redis.getClaudeAccount(accountId)
+      const accountData = existingAccountData || (await redis.getClaudeAccount(accountId))
       if (!accountData || Object.keys(accountData).length === 0) {
-        return { success: true }
+        return { success: true, accountData: null }
       }
 
       const updatedAccountData = { ...accountData }
@@ -1540,7 +1540,7 @@ class ClaudeAccountService {
       }
 
       logger.info(`✅ Cleared Opus rate limit state for account ${accountId}`)
-      return { success: true }
+      return { success: true, accountData: updatedAccountData }
     } catch (error) {
       logger.error(`❌ Failed to clear Opus rate limit for account: ${accountId}`, error)
       throw error
@@ -1600,9 +1600,9 @@ class ClaudeAccountService {
   }
 
   // 🔍 检查账号是否处于 Opus 限流状态（自动清理过期标记）
-  async isAccountOpusRateLimited(accountId) {
+  async isAccountOpusRateLimited(accountId, existingAccountData = null) {
     try {
-      const accountData = await redis.getClaudeAccount(accountId)
+      const accountData = existingAccountData || (await redis.getClaudeAccount(accountId))
       if (!accountData || Object.keys(accountData).length === 0) {
         return false
       }
@@ -1613,13 +1613,13 @@ class ClaudeAccountService {
 
       const resetTime = new Date(accountData.opusRateLimitEndAt)
       if (Number.isNaN(resetTime.getTime())) {
-        await this.clearAccountOpusRateLimit(accountId)
+        await this.clearAccountOpusRateLimit(accountId, accountData)
         return false
       }
 
       const now = new Date()
       if (now >= resetTime) {
-        await this.clearAccountOpusRateLimit(accountId)
+        await this.clearAccountOpusRateLimit(accountId, accountData)
         return false
       }
 
@@ -1631,23 +1631,24 @@ class ClaudeAccountService {
   }
 
   // ♻️ 检查并清理已过期的 Opus 限流标记
-  async clearExpiredOpusRateLimit(accountId) {
+  async clearExpiredOpusRateLimit(accountId, existingAccountData = null) {
     try {
-      const accountData = await redis.getClaudeAccount(accountId)
+      const accountData = existingAccountData || (await redis.getClaudeAccount(accountId))
       if (!accountData || Object.keys(accountData).length === 0) {
-        return { success: true }
+        return { success: true, accountData: null }
       }
 
       if (!accountData.opusRateLimitEndAt) {
-        return { success: true }
+        return { success: true, accountData }
       }
 
       const resetTime = new Date(accountData.opusRateLimitEndAt)
       if (Number.isNaN(resetTime.getTime()) || new Date() >= resetTime) {
-        await this.clearAccountOpusRateLimit(accountId)
+        const clearResult = await this.clearAccountOpusRateLimit(accountId, accountData)
+        return { success: true, accountData: clearResult.accountData, cleared: true }
       }
 
-      return { success: true }
+      return { success: true, accountData }
     } catch (error) {
       logger.error(`❌ Failed to clear expired Opus rate limit for account: ${accountId}`, error)
       throw error
@@ -1711,9 +1712,9 @@ class ClaudeAccountService {
   }
 
   // 🔍 检查账号是否处于限流状态
-  async isAccountRateLimited(accountId) {
+  async isAccountRateLimited(accountId, existingAccountData = null) {
     try {
-      const accountData = await redis.getClaudeAccount(accountId)
+      const accountData = existingAccountData || (await redis.getClaudeAccount(accountId))
       if (!accountData || Object.keys(accountData).length === 0) {
         return false
       }
@@ -1731,7 +1732,10 @@ class ClaudeAccountService {
 
           // 如果当前时间超过限流结束时间，自动解除
           if (now >= rateLimitEndAt) {
-            await this.removeAccountRateLimit(accountId)
+            // 传入 existingAccountData 时跳过清理以减少 Redis 写入；下次无缓存调用时会清理
+            if (!existingAccountData) {
+              await this.removeAccountRateLimit(accountId)
+            }
             return false
           }
 
@@ -1743,7 +1747,10 @@ class ClaudeAccountService {
 
           // 如果限流超过1小时，自动解除
           if (hoursSinceRateLimit >= 1) {
-            await this.removeAccountRateLimit(accountId)
+            // 传入 existingAccountData 时跳过清理以减少 Redis 写入；下次无缓存调用时会清理
+            if (!existingAccountData) {
+              await this.removeAccountRateLimit(accountId)
+            }
             return false
           }
 
@@ -1759,9 +1766,9 @@ class ClaudeAccountService {
   }
 
   // 📊 获取账号的限流信息
-  async getAccountRateLimitInfo(accountId) {
+  async getAccountRateLimitInfo(accountId, existingAccountData = null) {
     try {
-      const accountData = await redis.getClaudeAccount(accountId)
+      const accountData = existingAccountData || (await redis.getClaudeAccount(accountId))
       if (!accountData || Object.keys(accountData).length === 0) {
         return null
       }

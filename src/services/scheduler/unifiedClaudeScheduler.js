@@ -268,9 +268,15 @@ class UnifiedClaudeScheduler {
               `⏱️ Bound Claude OAuth account ${boundAccount.id} is temporarily unavailable, falling back to pool`
             )
           } else {
-            const isRateLimited = await claudeAccountService.isAccountRateLimited(boundAccount.id)
+            const isRateLimited = await claudeAccountService.isAccountRateLimited(
+              boundAccount.id,
+              boundAccount
+            )
             if (isRateLimited) {
-              const rateInfo = await claudeAccountService.getAccountRateLimitInfo(boundAccount.id)
+              const rateInfo = await claudeAccountService.getAccountRateLimitInfo(
+                boundAccount.id,
+                boundAccount
+              )
               const error = new Error('Dedicated Claude account is rate limited')
               error.code = 'CLAUDE_DEDICATED_RATE_LIMITED'
               error.accountId = boundAccount.id
@@ -284,7 +290,7 @@ class UnifiedClaudeScheduler {
               )
             } else {
               if (isOpusRequest) {
-                await claudeAccountService.clearExpiredOpusRateLimit(boundAccount.id)
+                await claudeAccountService.clearExpiredOpusRateLimit(boundAccount.id, boundAccount)
               }
               logger.info(
                 `🎯 Using bound dedicated Claude OAuth account: ${boundAccount.name} (${apiKeyData.claudeAccountId}) for API key ${apiKeyData.name}`
@@ -614,63 +620,90 @@ class UnifiedClaudeScheduler {
 
     // 获取官方Claude账户（共享池）
     const claudeAccounts = await redis.getAllClaudeAccounts()
+
+    // 收集所有需要 temp_unavailable 检查的账户（用于批量查询）
+    const tempUnavailableCheckList = []
+
+    // 第一遍：过滤基本条件，收集需要 temp_unavailable 检查的 Claude 账户
+    const eligibleClaudeAccounts = []
     for (const account of claudeAccounts) {
       if (
         account.isActive === 'true' &&
         account.status !== 'error' &&
         account.status !== 'blocked' &&
         account.status !== 'temp_error' &&
-        (account.accountType === 'shared' || !account.accountType) && // 兼容旧数据
+        (account.accountType === 'shared' || !account.accountType) &&
         isSchedulable(account.schedulable)
       ) {
-        // 检查是否可调度
-
-        // 检查模型支持
         if (!this._isModelSupportedByAccount(account, 'claude-official', requestedModel)) {
           continue
         }
-
-        // 检查是否临时不可用
-        const isTempUnavailable = await this.isAccountTemporarilyUnavailable(
-          account.id,
-          'claude-official'
-        )
-        if (isTempUnavailable) {
-          logger.debug(
-            `⏭️ Skipping Claude Official account ${account.name} - temporarily unavailable`
-          )
-          continue
-        }
-
-        // 检查是否被限流
-        const isRateLimited = await claudeAccountService.isAccountRateLimited(account.id)
-        if (isRateLimited) {
-          continue
-        }
-
-        if (isOpusRequest) {
-          const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(account.id)
-          if (isOpusRateLimited) {
-            logger.info(
-              `🚫 Skipping account ${account.name} (${account.id}) due to active Opus limit`
-            )
-            continue
-          }
-        }
-
-        availableAccounts.push({
-          ...account,
-          accountId: account.id,
-          accountType: 'claude-official',
-          priority: parseInt(account.priority) || 50, // 默认优先级50
-          lastUsedAt: account.lastUsedAt || '0'
-        })
+        eligibleClaudeAccounts.push(account)
+        tempUnavailableCheckList.push({ accountId: account.id, accountType: 'claude-official' })
       }
     }
 
-    // 获取Claude Console账户
-    const consoleAccounts = await claudeConsoleAccountService.getAllAccounts()
+    // 获取Claude Console账户（skipConcurrency: 调度器不使用 activeTaskCount，后续批量查询）
+    const consoleAccounts = await claudeConsoleAccountService.getAllAccounts({
+      skipConcurrency: true
+    })
     logger.info(`📋 Found ${consoleAccounts.length} total Claude Console accounts`)
+
+    // 收集 Console 账户到 temp_unavailable 批量检查列表
+    for (const account of consoleAccounts) {
+      tempUnavailableCheckList.push({ accountId: account.id, accountType: 'claude-console' })
+    }
+
+    // 获取Bedrock账户（共享池）
+    const bedrockAccountsResult = await bedrockAccountService.getAllAccounts()
+    const bedrockAccounts = bedrockAccountsResult.success ? bedrockAccountsResult.data : []
+    if (bedrockAccounts.length > 0) {
+      logger.info(`📋 Found ${bedrockAccounts.length} total Bedrock accounts`)
+      for (const account of bedrockAccounts) {
+        tempUnavailableCheckList.push({ accountId: account.id, accountType: 'bedrock' })
+      }
+    }
+
+    // 批量检查所有账户的 temp_unavailable 状态（1 个 pipeline = 1 个子请求）
+    const tempUnavailableMap =
+      await upstreamErrorHelper.batchCheckTempUnavailable(tempUnavailableCheckList)
+
+    // 第二遍：使用批量结果处理 Claude 账户
+    for (const account of eligibleClaudeAccounts) {
+      const isTempUnavailable = tempUnavailableMap.get(`claude-official:${account.id}`) || false
+      if (isTempUnavailable) {
+        logger.debug(
+          `⏭️ Skipping Claude Official account ${account.name} - temporarily unavailable`
+        )
+        continue
+      }
+
+      const isRateLimited = await claudeAccountService.isAccountRateLimited(account.id, account)
+      if (isRateLimited) {
+        continue
+      }
+
+      if (isOpusRequest) {
+        const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(
+          account.id,
+          account
+        )
+        if (isOpusRateLimited) {
+          logger.info(
+            `🚫 Skipping account ${account.name} (${account.id}) due to active Opus limit`
+          )
+          continue
+        }
+      }
+
+      availableAccounts.push({
+        ...account,
+        accountId: account.id,
+        accountType: 'claude-official',
+        priority: parseInt(account.priority) || 50,
+        lastUsedAt: account.lastUsedAt || '0'
+      })
+    }
 
     // 🔢 统计Console账户并发排除情况
     let consoleAccountsEligibleCount = 0 // 符合基本条件的账户数
@@ -681,7 +714,7 @@ class UnifiedClaudeScheduler {
 
     for (const account of consoleAccounts) {
       // 主动检查封禁状态并尝试恢复（在过滤之前执行，确保可以恢复被封禁的账户）
-      const wasBlocked = await claudeConsoleAccountService.isAccountBlocked(account.id)
+      const wasBlocked = await claudeConsoleAccountService.isAccountBlocked(account.id, account)
 
       // 如果账户之前被封禁但现在已恢复，重新获取最新状态
       let currentAccount = account
@@ -698,7 +731,8 @@ class UnifiedClaudeScheduler {
       if (currentAccount.status === 'quota_exceeded') {
         // 触发配额检查，如果已到重置时间会自动恢复账户
         const isStillExceeded = await claudeConsoleAccountService.isAccountQuotaExceeded(
-          currentAccount.id
+          currentAccount.id,
+          currentAccount
         )
         if (!isStillExceeded) {
           // 重新获取账户最新状态
@@ -738,20 +772,20 @@ class UnifiedClaudeScheduler {
         }
 
         // 主动触发一次额度检查，确保状态即时生效
-        try {
-          await claudeConsoleAccountService.checkQuotaUsage(currentAccount.id)
-        } catch (e) {
-          logger.warn(
-            `Failed to check quota for Claude Console account ${currentAccount.name}: ${e.message}`
-          )
-          // 继续处理该账号
+        // Workers 模式下跳过（节省 2+ 子请求/账户），由 usage 回调和 cron 任务处理
+        if (process.env.WORKER_MODE !== 'true') {
+          try {
+            await claudeConsoleAccountService.checkQuotaUsage(currentAccount.id)
+          } catch (e) {
+            logger.warn(
+              `Failed to check quota for Claude Console account ${currentAccount.name}: ${e.message}`
+            )
+          }
         }
 
-        // 检查是否临时不可用
-        const isTempUnavailable = await this.isAccountTemporarilyUnavailable(
-          currentAccount.id,
-          'claude-console'
-        )
+        // 检查是否临时不可用（使用批量查询结果）
+        const isTempUnavailable =
+          tempUnavailableMap.get(`claude-console:${currentAccount.id}`) || false
         if (isTempUnavailable) {
           logger.debug(
             `⏭️ Skipping Claude Console account ${currentAccount.name} - temporarily unavailable`
@@ -761,10 +795,12 @@ class UnifiedClaudeScheduler {
 
         // 检查是否被限流
         const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(
-          currentAccount.id
+          currentAccount.id,
+          currentAccount
         )
         const isQuotaExceeded = await claudeConsoleAccountService.isAccountQuotaExceeded(
-          currentAccount.id
+          currentAccount.id,
+          currentAccount
         )
 
         // 🔢 记录符合基本条件的账户（通过了前面所有检查，但可能因并发被排除）
@@ -801,20 +837,29 @@ class UnifiedClaudeScheduler {
       }
     }
 
-    // 🚀 批量查询所有账户的并发数（Promise.all 并行执行）
+    // 🚀 批量查询所有账户的并发数
     if (accountsNeedingConcurrencyCheck.length > 0) {
       logger.debug(
         `🚀 Batch checking concurrency for ${accountsNeedingConcurrencyCheck.length} accounts`
       )
 
-      const concurrencyCheckPromises = accountsNeedingConcurrencyCheck.map((account) =>
-        redis.getConsoleAccountConcurrency(account.id).then((currentConcurrency) => ({
+      let concurrencyResults
+      if (process.env.WORKER_MODE === 'true' && redis.batchGetConcurrency) {
+        const ids = accountsNeedingConcurrencyCheck.map((a) => `console_account:${a.id}`)
+        const counts = await redis.batchGetConcurrency(ids)
+        concurrencyResults = accountsNeedingConcurrencyCheck.map((account, i) => ({
           account,
-          currentConcurrency
+          currentConcurrency: counts[i]
         }))
-      )
-
-      const concurrencyResults = await Promise.all(concurrencyCheckPromises)
+      } else {
+        const concurrencyCheckPromises = accountsNeedingConcurrencyCheck.map((account) =>
+          redis.getConsoleAccountConcurrency(account.id).then((currentConcurrency) => ({
+            account,
+            currentConcurrency
+          }))
+        )
+        concurrencyResults = await Promise.all(concurrencyCheckPromises)
+      }
 
       // 处理批量查询结果
       for (const { account, currentConcurrency } of concurrencyResults) {
@@ -841,12 +886,8 @@ class UnifiedClaudeScheduler {
       }
     }
 
-    // 获取Bedrock账户（共享池）
-    const bedrockAccountsResult = await bedrockAccountService.getAllAccounts()
-    if (bedrockAccountsResult.success) {
-      const bedrockAccounts = bedrockAccountsResult.data
-      logger.info(`📋 Found ${bedrockAccounts.length} total Bedrock accounts`)
-
+    // Bedrock 账户处理（已在上方加载，使用批量 temp_unavailable 结果）
+    if (bedrockAccounts.length > 0) {
       for (const account of bedrockAccounts) {
         logger.info(
           `🔍 Checking Bedrock account: ${account.name} - isActive: ${account.isActive}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
@@ -857,11 +898,7 @@ class UnifiedClaudeScheduler {
           account.accountType === 'shared' &&
           isSchedulable(account.schedulable)
         ) {
-          // 检查是否临时不可用
-          const isTempUnavailable = await this.isAccountTemporarilyUnavailable(
-            account.id,
-            'bedrock'
-          )
+          const isTempUnavailable = tempUnavailableMap.get(`bedrock:${account.id}`) || false
           if (isTempUnavailable) {
             logger.debug(`⏭️ Skipping Bedrock account ${account.name} - temporarily unavailable`)
             continue
@@ -1015,7 +1052,7 @@ class UnifiedClaudeScheduler {
         }
 
         // 检查是否限流或过载
-        const isRateLimited = await claudeAccountService.isAccountRateLimited(accountId)
+        const isRateLimited = await claudeAccountService.isAccountRateLimited(accountId, account)
         const isOverloaded = await claudeAccountService.isAccountOverloaded(accountId)
         if (isRateLimited || isOverloaded) {
           return false
@@ -1026,7 +1063,10 @@ class UnifiedClaudeScheduler {
           typeof requestedModel === 'string' &&
           requestedModel.toLowerCase().includes('opus')
         ) {
-          const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(accountId)
+          const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(
+            accountId,
+            account
+          )
           if (isOpusRateLimited) {
             logger.info(`🚫 Account ${accountId} skipped due to active Opus limit (session check)`)
             return false
@@ -1071,11 +1111,15 @@ class UnifiedClaudeScheduler {
           return false
         }
         // 检查是否超额
-        try {
-          await claudeConsoleAccountService.checkQuotaUsage(accountId)
-        } catch (e) {
-          logger.warn(`Failed to check quota for Claude Console account ${accountId}: ${e.message}`)
-          // 继续处理
+        if (process.env.WORKER_MODE !== 'true') {
+          try {
+            await claudeConsoleAccountService.checkQuotaUsage(accountId)
+          } catch (e) {
+            logger.warn(
+              `Failed to check quota for Claude Console account ${accountId}: ${e.message}`
+            )
+            // 继续处理
+          }
         }
 
         // 检查是否临时不可用
@@ -1084,10 +1128,10 @@ class UnifiedClaudeScheduler {
         }
 
         // 检查是否被限流
-        if (await claudeConsoleAccountService.isAccountRateLimited(accountId)) {
+        if (await claudeConsoleAccountService.isAccountRateLimited(accountId, account)) {
           return false
         }
-        if (await claudeConsoleAccountService.isAccountQuotaExceeded(accountId)) {
+        if (await claudeConsoleAccountService.isAccountQuotaExceeded(accountId, null)) {
           return false
         }
         // 检查是否未授权（401错误）
@@ -1095,7 +1139,7 @@ class UnifiedClaudeScheduler {
           return false
         }
         // 检查是否过载（529错误）
-        if (await claudeConsoleAccountService.isAccountOverloaded(accountId)) {
+        if (await claudeConsoleAccountService.isAccountOverloaded(accountId, account)) {
           return false
         }
 

@@ -96,7 +96,7 @@ class ClaudeConsoleRelayService {
       }
 
       // 获取账户信息
-      account = await claudeConsoleAccountService.getAccount(accountId)
+      account = options.accountData || (await claudeConsoleAccountService.getAccount(accountId))
       if (!account) {
         throw new Error('Claude Console Claude account not found')
       }
@@ -390,11 +390,17 @@ class ClaudeConsoleRelayService {
         }
       } else if (response.status === 200 || response.status === 201) {
         // 如果请求成功，检查并移除错误状态
-        const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(accountId)
+        const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(
+          accountId,
+          account
+        )
         if (isRateLimited) {
           await claudeConsoleAccountService.removeAccountRateLimit(accountId)
         }
-        const isOverloaded = await claudeConsoleAccountService.isAccountOverloaded(accountId)
+        const isOverloaded = await claudeConsoleAccountService.isAccountOverloaded(
+          accountId,
+          account
+        )
         if (isOverloaded) {
           await claudeConsoleAccountService.removeAccountOverload(accountId)
         }
@@ -568,7 +574,7 @@ class ClaudeConsoleRelayService {
       }
 
       // 获取账户信息
-      account = await claudeConsoleAccountService.getAccount(accountId)
+      account = options.accountData || (await claudeConsoleAccountService.getAccount(accountId))
       if (!account) {
         throw new Error('Claude Console Claude account not found')
       }
@@ -961,16 +967,20 @@ class ClaudeConsoleRelayService {
           }
 
           // 成功响应，检查并移除错误状态
-          claudeConsoleAccountService.isAccountRateLimited(accountId).then((isRateLimited) => {
-            if (isRateLimited) {
-              claudeConsoleAccountService.removeAccountRateLimit(accountId)
-            }
-          })
-          claudeConsoleAccountService.isAccountOverloaded(accountId).then((isOverloaded) => {
-            if (isOverloaded) {
-              claudeConsoleAccountService.removeAccountOverload(accountId)
-            }
-          })
+          claudeConsoleAccountService
+            .isAccountRateLimited(accountId, account)
+            .then((isRateLimited) => {
+              if (isRateLimited) {
+                claudeConsoleAccountService.removeAccountRateLimit(accountId)
+              }
+            })
+          claudeConsoleAccountService
+            .isAccountOverloaded(accountId, account)
+            .then((isOverloaded) => {
+              if (isOverloaded) {
+                claudeConsoleAccountService.removeAccountOverload(accountId)
+              }
+            })
 
           // 设置响应头
           // ⚠️ 关键修复：尊重 auth.js 提前设置的 Connection: close

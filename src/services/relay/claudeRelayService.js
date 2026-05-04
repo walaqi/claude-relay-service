@@ -432,33 +432,37 @@ class ClaudeRelayService {
       const sessionHash = sessionHelper.generateSessionHash(requestBody)
 
       // 选择可用的Claude账户（支持专属绑定和sticky会话）
-      let accountSelection
-      try {
-        accountSelection = await unifiedClaudeScheduler.selectAccountForApiKey(
-          apiKeyData,
-          sessionHash,
-          requestBody.model
-        )
-      } catch (error) {
-        if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
-          const limitMessage = this._buildStandardRateLimitMessage(error.rateLimitEndAt)
-          logger.warn(
-            `🚫 Dedicated account ${error.accountId} is rate limited for API key ${apiKeyData.name}, returning 403`
+      let accountId, accountType, account
+      if (options.preSelectedAccount) {
+        ;({ accountId, accountType, accountData: account } = options.preSelectedAccount)
+      } else {
+        let accountSelection
+        try {
+          accountSelection = await unifiedClaudeScheduler.selectAccountForApiKey(
+            apiKeyData,
+            sessionHash,
+            requestBody.model
           )
-          return {
-            statusCode: 403,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              error: 'upstream_rate_limited',
-              message: limitMessage
-            }),
-            accountId: error.accountId
+        } catch (error) {
+          if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
+            const limitMessage = this._buildStandardRateLimitMessage(error.rateLimitEndAt)
+            logger.warn(
+              `🚫 Dedicated account ${error.accountId} is rate limited for API key ${apiKeyData.name}, returning 403`
+            )
+            return {
+              statusCode: 403,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                error: 'upstream_rate_limited',
+                message: limitMessage
+              }),
+              accountId: error.accountId
+            }
           }
+          throw error
         }
-        throw error
+        ;({ accountId, accountType } = accountSelection)
       }
-      const { accountId } = accountSelection
-      const { accountType } = accountSelection
       selectedAccountId = accountId
 
       logger.info(
@@ -473,7 +477,7 @@ class ClaudeRelayService {
           throw new Error('accountId missing for queue lock')
         }
         // 获取账户信息以检查账户级串行队列配置
-        const accountForQueue = await claudeAccountService.getAccount(accountId)
+        const accountForQueue = account || (await claudeAccountService.getAccount(accountId))
         const accountConfig = accountForQueue
           ? { maxConcurrency: parseInt(accountForQueue.maxConcurrency || '0', 10) }
           : null
@@ -534,11 +538,15 @@ class ClaudeRelayService {
       }
 
       // 获取账户信息
-      let account = await claudeAccountService.getAccount(accountId)
+      if (!account) {
+        account = await claudeAccountService.getAccount(accountId)
+      }
 
       if (isOpusModelRequest) {
-        await claudeAccountService.clearExpiredOpusRateLimit(accountId)
-        account = await claudeAccountService.getAccount(accountId)
+        const clearResult = await claudeAccountService.clearExpiredOpusRateLimit(accountId, account)
+        if (clearResult.accountData) {
+          account = clearResult.accountData
+        }
       }
 
       const isDedicatedOfficialAccount =
@@ -550,7 +558,10 @@ class ClaudeRelayService {
       let opusRateLimitActive = false
       let opusRateLimitEndAt = null
       if (isOpusModelRequest) {
-        opusRateLimitActive = await claudeAccountService.isAccountOpusRateLimited(accountId)
+        opusRateLimitActive = await claudeAccountService.isAccountOpusRateLimited(
+          accountId,
+          account
+        )
         opusRateLimitEndAt = account?.opusRateLimitEndAt || null
       }
 
@@ -571,7 +582,7 @@ class ClaudeRelayService {
       }
 
       // 获取有效的访问token
-      const accessToken = await claudeAccountService.getValidAccessToken(accountId)
+      const accessToken = await claudeAccountService.getValidAccessToken(accountId, account)
 
       const isRealClaudeCodeRequest = this._isActualClaudeCodeRequest(requestBody, clientHeaders)
       const processedBody = this._processRequestBody(requestBody, account, isRealClaudeCodeRequest)
@@ -581,7 +592,7 @@ class ClaudeRelayService {
       this.bodyStore.set(bodyStoreIdNonStream, originalBodyString)
 
       // 获取代理配置
-      const proxyAgent = await this._getProxyAgent(accountId)
+      const proxyAgent = await this._getProxyAgent(accountId, account)
 
       // 设置客户端断开监听器
       const handleClientDisconnect = () => {
@@ -642,7 +653,7 @@ class ClaudeRelayService {
         return { response, retryCount }
       }
 
-      let requestOptions = options
+      let requestOptions = { ...options, account }
       let { response, retryCount } = await makeRequestWithRetries(requestOptions)
 
       if (
@@ -1625,7 +1636,7 @@ class ClaudeRelayService {
     const url = new URL(this.claudeApiUrl)
 
     // 获取账户信息用于统一 User-Agent
-    const account = await claudeAccountService.getAccount(accountId)
+    const account = requestOptions?.account || (await claudeAccountService.getAccount(accountId))
 
     // 使用公共方法准备请求头和 payload
     const prepared = await this._prepareRequestHeadersAndPayload(
@@ -1798,33 +1809,37 @@ class ClaudeRelayService {
       const sessionHash = sessionHelper.generateSessionHash(requestBody)
 
       // 选择可用的Claude账户（支持专属绑定和sticky会话）
-      let accountSelection
-      try {
-        accountSelection = await unifiedClaudeScheduler.selectAccountForApiKey(
-          apiKeyData,
-          sessionHash,
-          requestBody.model
-        )
-      } catch (error) {
-        if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
-          const limitMessage = this._buildStandardRateLimitMessage(error.rateLimitEndAt)
-          if (!responseStream.headersSent) {
-            responseStream.status(403)
-            responseStream.setHeader('Content-Type', 'application/json')
-          }
-          responseStream.write(
-            JSON.stringify({
-              error: 'upstream_rate_limited',
-              message: limitMessage
-            })
+      let accountId, accountType, account
+      if (options.preSelectedAccount) {
+        ;({ accountId, accountType, accountData: account } = options.preSelectedAccount)
+      } else {
+        let accountSelection
+        try {
+          accountSelection = await unifiedClaudeScheduler.selectAccountForApiKey(
+            apiKeyData,
+            sessionHash,
+            requestBody.model
           )
-          responseStream.end()
-          return
+        } catch (error) {
+          if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
+            const limitMessage = this._buildStandardRateLimitMessage(error.rateLimitEndAt)
+            if (!responseStream.headersSent) {
+              responseStream.status(403)
+              responseStream.setHeader('Content-Type', 'application/json')
+            }
+            responseStream.write(
+              JSON.stringify({
+                error: 'upstream_rate_limited',
+                message: limitMessage
+              })
+            )
+            responseStream.end()
+            return
+          }
+          throw error
         }
-        throw error
+        ;({ accountId, accountType } = accountSelection)
       }
-      const { accountId } = accountSelection
-      const { accountType } = accountSelection
       selectedAccountId = accountId
 
       // 📬 用户消息队列处理：如果是用户消息请求，需要获取队列锁
@@ -1835,7 +1850,7 @@ class ClaudeRelayService {
           throw new Error('accountId missing for queue lock')
         }
         // 获取账户信息以检查账户级串行队列配置
-        const accountForQueue = await claudeAccountService.getAccount(accountId)
+        const accountForQueue = account || (await claudeAccountService.getAccount(accountId))
         const accountConfig = accountForQueue
           ? { maxConcurrency: parseInt(accountForQueue.maxConcurrency || '0', 10) }
           : null
@@ -1908,11 +1923,15 @@ class ClaudeRelayService {
       )
 
       // 获取账户信息
-      let account = await claudeAccountService.getAccount(accountId)
+      if (!account) {
+        account = await claudeAccountService.getAccount(accountId)
+      }
 
       if (isOpusModelRequest) {
-        await claudeAccountService.clearExpiredOpusRateLimit(accountId)
-        account = await claudeAccountService.getAccount(accountId)
+        const clearResult = await claudeAccountService.clearExpiredOpusRateLimit(accountId, account)
+        if (clearResult.accountData) {
+          account = clearResult.accountData
+        }
       }
 
       const isDedicatedOfficialAccount =
@@ -1923,7 +1942,10 @@ class ClaudeRelayService {
 
       let opusRateLimitActive = false
       if (isOpusModelRequest) {
-        opusRateLimitActive = await claudeAccountService.isAccountOpusRateLimited(accountId)
+        opusRateLimitActive = await claudeAccountService.isAccountOpusRateLimited(
+          accountId,
+          account
+        )
       }
 
       if (isOpusModelRequest && isDedicatedOfficialAccount && opusRateLimitActive) {
@@ -1943,7 +1965,7 @@ class ClaudeRelayService {
       }
 
       // 获取有效的访问token
-      const accessToken = await claudeAccountService.getValidAccessToken(accountId)
+      const accessToken = await claudeAccountService.getValidAccessToken(accountId, account)
 
       const isRealClaudeCodeRequest = this._isActualClaudeCodeRequest(requestBody, clientHeaders)
       const processedBody = this._processRequestBody(requestBody, account, isRealClaudeCodeRequest)
@@ -1953,7 +1975,7 @@ class ClaudeRelayService {
       this.bodyStore.set(bodyStoreId, originalBodyString)
 
       // 获取代理配置
-      const proxyAgent = await this._getProxyAgent(accountId)
+      const proxyAgent = await this._getProxyAgent(accountId, account)
 
       // 发送流式请求并捕获usage数据
       await this._makeClaudeStreamRequestWithUsageCapture(
@@ -1975,7 +1997,8 @@ class ClaudeRelayService {
         {
           ...options,
           bodyStoreId,
-          isRealClaudeCodeRequest
+          isRealClaudeCodeRequest,
+          account
         },
         isDedicatedOfficialAccount,
         // 📬 新增回调：在收到响应头时释放队列锁
@@ -2041,7 +2064,7 @@ class ClaudeRelayService {
   ) {
     const maxRetries = 2 // 最大重试次数
     // 获取账户信息用于统一 User-Agent
-    const account = await claudeAccountService.getAccount(accountId)
+    const account = requestOptions?.account || (await claudeAccountService.getAccount(accountId))
 
     const isOpusModelRequest =
       typeof body?.model === 'string' && body.model.toLowerCase().includes('opus')

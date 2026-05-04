@@ -168,7 +168,7 @@ class ClaudeConsoleAccountService {
   }
 
   // 📋 获取所有Claude Console账户
-  async getAllAccounts() {
+  async getAllAccounts({ skipConcurrency = false } = {}) {
     try {
       const client = redis.getClientSafe()
       const accountIds = await redis.getAllIdsByIndex(
@@ -194,7 +194,9 @@ class ClaudeConsoleAccountService {
           const rateLimitInfo = this._getRateLimitInfo(accountData)
 
           // 获取实时并发计数
-          const activeTaskCount = await redis.getConsoleAccountConcurrency(accountData.id)
+          const activeTaskCount = skipConcurrency
+            ? null
+            : await redis.getConsoleAccountConcurrency(accountData.id)
 
           accounts.push({
             id: accountData.id,
@@ -619,9 +621,9 @@ class ClaudeConsoleAccountService {
   }
 
   // 🔍 检查账号是否处于限流状态
-  async isAccountRateLimited(accountId) {
+  async isAccountRateLimited(accountId, existingAccountData = null) {
     try {
-      const account = await this.getAccount(accountId)
+      const account = existingAccountData || (await this.getAccount(accountId))
       if (!account) {
         return false
       }
@@ -643,7 +645,10 @@ class ClaudeConsoleAccountService {
             : 60
 
         if (minutesSinceRateLimit >= rateLimitDuration) {
-          await this.removeAccountRateLimit(accountId)
+          // 传入 existingAccountData 时跳过清理以减少 Redis 写入；下次无缓存调用时会清理
+          if (!existingAccountData) {
+            await this.removeAccountRateLimit(accountId)
+          }
           return false
         }
 
@@ -661,9 +666,9 @@ class ClaudeConsoleAccountService {
   }
 
   // 🔍 检查账号是否因额度超限而被停用（懒惰检查）
-  async isAccountQuotaExceeded(accountId) {
+  async isAccountQuotaExceeded(accountId, existingAccountData = null) {
     try {
-      const account = await this.getAccount(accountId)
+      const account = existingAccountData || (await this.getAccount(accountId))
       if (!account) {
         return false
       }
@@ -925,9 +930,9 @@ class ClaudeConsoleAccountService {
   }
 
   // 🔍 检查账号是否处于临时封禁状态
-  async isAccountBlocked(accountId) {
+  async isAccountBlocked(accountId, existingAccountData = null) {
     try {
-      const account = await this.getAccount(accountId)
+      const account = existingAccountData || (await this.getAccount(accountId))
       if (!account) {
         return false
       }
@@ -1035,9 +1040,9 @@ class ClaudeConsoleAccountService {
   }
 
   // 🔍 检查账号是否处于过载状态
-  async isAccountOverloaded(accountId) {
+  async isAccountOverloaded(accountId, existingAccountData = null) {
     try {
-      const account = await this.getAccount(accountId)
+      const account = existingAccountData || (await this.getAccount(accountId))
       if (!account) {
         return false
       }
